@@ -1,41 +1,23 @@
-import { createClient } from "@/lib/supabase/server";
-import { login, signup, logout } from "@/app/auth/actions";
+import { createClient } from '@/lib/supabase/server'
 
-// Componentes do Frontend
-import LoginPage from "./components/LoginPage";
-import Dashboard from "./components/Dashboard";
+export default async function Page() {
+  const supabase = createClient()
 
-export default async function Page({ searchParams }: { searchParams: { error?: string, checkout?: string }}) {
-  const supabase = createClient();
+  const { data: { user }, error } = await supabase.auth.getUser()
 
-  // LINHA CORRIGIDA AQUI
-  const { data: { user }, error } = await supabase.auth.getUser();
-
-  let profile = null;
+  let profile = null
   if (user) {
     const { data } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', user.id)
-      .single();
-    profile = data;
-  }
-
-  if (!user || !profile) {
-    return (
-        <LoginPage 
-            loginAction={login} 
-            signupAction={signup} 
-            error={searchParams.error} 
-        />
-    );
+      .single()
+    profile = data
   }
 
   return (
-    <Dashboard 
-        user={{...user, ...profile}} // Combina dados de auth e profile
-        logoutAction={logout} 
-        checkoutStatus={searchParams.checkout}
-    />
-  );
+    <div>
+      {user ? <p>Olá, {profile?.name}</p> : <p>Não logado</p>}
+    </div>
+  )
 }

@@ -1,66 +1,42 @@
-import { NextResponse } from "next/server";
-import Stripe from "stripe";
-import { headers } from "next/headers";
-import { createClient } from "@supabase/supabase-js";
+import { headers } from 'next/headers'
+import { createClient } from '@/lib/supabase/server'
+import Stripe from 'stripe'
 
-// Importante: Usar o cliente com a chave de serviço para ter permissões de admin
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2022-11-15' })
+const supabaseAdmin = createClient()
 
 export async function POST(req: Request) {
-  const body = await req.text();
-  const signature = (await headers()).get("stripe-signature") as string;
+  const body = await req.text()
+  const signature = (await headers()).get('stripe-signature') as string
 
-  let event: Stripe.Event;
-
+  let event: Stripe.Event
   try {
-    event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
+    event = stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET!)
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: `Webhook Error: ${errorMessage}` }, { status: 400 });
+    return new Response('Webhook signature mismatch', { status: 400 })
   }
 
   if (event.type === 'checkout.session.completed') {
-    const session = event.data.object as Stripe.Checkout.Session;
-    const { userId, moduleId } = session.metadata || {};
+    const session = event.data.object as Stripe.Checkout.Session
+    const userId = session.metadata?.userId as string
+    const moduleId = session.metadata?.moduleId as string
 
-    if (!userId || !moduleId) {
-      return NextResponse.json({ error: "Metadata ausente." }, { status: 400 });
-    }
-
-    try {
-      // 1. Pega os módulos atuais do usuário
     const { data, error: profileError } = await supabaseAdmin
-  .from('profiles')
-  .select('modules')
-  .eq('id', userId)
-  .single();
-      
-      if (profileError) throw profileError;
+      .from('profiles')
+      .select('modules')
+      .eq('id', userId)
+      .single()
 
-      // 2. Adiciona o novo módulo (evitando duplicatas)
-const currentModules = data?.modules || [];
+    if (profileError) throw new Error(profileError.message)
 
-      const updatedModules = [...new Set([...currentModules, moduleId])];
+    const currentModules = data?.modules || []
+    const updatedModules = [...new Set([...currentModules, moduleId])]
 
-      // 3. Atualiza o perfil do usuário com a nova lista de módulos
-      const { error: updateError } = await supabaseAdmin
-        .from('profiles')
-        .update({ modules: updatedModules })
-        .eq('id', userId);
-
-      if (updateError) throw updateError;
-      
-    } catch (error) {
-        console.error("Erro ao processar webhook do Supabase:", error);
-        return NextResponse.json({ error: "Erro interno ao atualizar dados." }, { status: 500 });
-    }
+    await supabaseAdmin
+      .from('profiles')
+      .update({ modules: updatedModules })
+      .eq('id', userId)
   }
 
-  return NextResponse.json({ received: true });
+  return new Response(JSON.stringify({ received: true }), { status: 200 })
 }
