@@ -14,7 +14,7 @@ const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
 
 export async function POST(req: Request) {
   const body = await req.text();
-  const signature = headers().get("stripe-signature") as string;
+  const signature = (await headers()).get("stripe-signature") as string;
 
   let event: Stripe.Event;
 
@@ -35,16 +35,17 @@ export async function POST(req: Request) {
 
     try {
       // 1. Pega os módulos atuais do usuário
-      const { profile, error: profileError } = await supabaseAdmin
-        .from('profiles')
-        .select('modules')
-        .eq('id', userId)
-        .single();
+    const { data, error: profileError } = await supabaseAdmin
+  .from('profiles')
+  .select('modules')
+  .eq('id', userId)
+  .single();
       
       if (profileError) throw profileError;
 
       // 2. Adiciona o novo módulo (evitando duplicatas)
-      const currentModules = profile.modules || [];
+const currentModules = data?.modules || [];
+
       const updatedModules = [...new Set([...currentModules, moduleId])];
 
       // 3. Atualiza o perfil do usuário com a nova lista de módulos

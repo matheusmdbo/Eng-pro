@@ -23,7 +23,7 @@ export async function login(formData: FormData) {
 
 export async function signup(formData: FormData) {
   const supabase = createClient()
-  const origin = headers().get('origin')
+const origin = (await headers()).get('origin');
   const email = formData.get('email') as string
   const password = formData.get('password') as string
   const name = formData.get('name') as string
@@ -31,9 +31,9 @@ export async function signup(formData: FormData) {
   // ESTA É A PARTE CORRIGIDA
   const options = {
     emailRedirectTo: `${origin}/auth/callback`,
-    {
+    
       name: name,
-    }
+    
   }
 
   const { error } = await supabase.auth.signUp({
