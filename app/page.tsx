@@ -6,6 +6,33 @@ import * as THREE from "three";
 // --- TIPOS GLOBAIS ---
 type AnyDict = {[key: string]: any};
 
+// ============================================================
+// CONFIGURAÇÃO DO OWNER (recebe notificações de novos logins)
+// ============================================================
+const OWNER_EMAIL = "admin@engcalcpro.com"; // ← ALTERE para seu e-mail real
+const NOTIFY_ENDPOINT = "/api/notify"; // ← Endpoint da API Route (ver PRÓXIMOS PASSOS)
+
+async function notifyOwnerNewUser(user: AnyDict) {
+  try {
+    await fetch(NOTIFY_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "new_registration",
+        ownerEmail: OWNER_EMAIL,
+        user: { name: user.name, email: user.email, createdAt: user.createdAt },
+      }),
+    });
+  } catch (e) {
+    // Silently fail — não bloqueia o registro do usuário
+    console.warn("Falha ao notificar owner:", e);
+  }
+  // Também salva no log local para o owner consultar
+  const logs = JSON.parse(localStorage.getItem("owner:registrationLog") || "[]");
+  logs.unshift({ name: user.name, email: user.email, createdAt: user.createdAt });
+  localStorage.setItem("owner:registrationLog", JSON.stringify(logs.slice(0, 200)));
+}
+
 // --- ARMAZENAMENTO (com fallback para localStorage) ---
 const STORAGE = {
   async get(k: string){
@@ -35,7 +62,6 @@ const STORAGE = {
         const r = await (window as any).storage.list(p);
         return r?.keys || [];
       } else {
-        // fallback: list localStorage keys that start with prefix p
         return Object.keys(localStorage).filter(k => k.startsWith(p));
       }
     }catch{return []}
@@ -50,6 +76,293 @@ const STORAGE = {
       return true;
     }catch{return false}
   },
+}
+
+// ============================================================
+// GLOSSÁRIO DE SIGLAS — por módulo
+// ============================================================
+const GLOSSARY: Record<string, {cat: string; items: {sigla: string; desc: string; unit?: string; io: "in"|"out"}[]}[]> = {
+  tc: [
+    { cat: "DADOS DE ENTRADA", items: [
+      { sigla: "mat_d", desc: "Densidade do material transportado", unit: "kg/m³", io: "in" },
+      { sigla: "cap_th", desc: "Capacidade de projeto do transportador", unit: "t/h", io: "in" },
+      { sigla: "vel_ms", desc: "Velocidade da correia", unit: "m/s", io: "in" },
+      { sigla: "comp_m", desc: "Comprimento do transportador (centro a centro)", unit: "m", io: "in" },
+      { sigla: "elev_m", desc: "Elevação (desnível) entre cauda e cabeça", unit: "m", io: "in" },
+      { sigla: "larg_pol", desc: "Largura da correia", unit: "pol", io: "in" },
+      { sigla: "ang_rol", desc: "Ângulo de acomodação dos rolos de carga", unit: "°", io: "in" },
+      { sigla: "esp_rol", desc: "Espaçamento entre roletes de carga", unit: "m", io: "in" },
+      { sigla: "d_tamb_mm", desc: "Diâmetro do tambor de acionamento (motriz)", unit: "mm", io: "in" },
+      { sigla: "ang_abr", desc: "Ângulo de abraçamento do tambor motriz", unit: "°", io: "in" },
+      { sigla: "n_limp", desc: "Número de limpadores/raspadores", unit: "-", io: "in" },
+      { sigla: "Wb", desc: "Peso da correia por metro", unit: "kgf/m", io: "in" },
+      { sigla: "cap_tens", desc: "Capacidade de tensão da correia", unit: "N/m", io: "in" },
+      { sigla: "Cs", desc: "Fator de atrito do material com guias laterais (CEMA Tab. 6-7)", unit: "-", io: "in" },
+      { sigla: "Ft", desc: "Força para flexionar a correia nos tambores", unit: "kgf", io: "in" },
+      { sigla: "ef_c", desc: "Eficiência (rendimento) da correia", unit: "-", io: "in" },
+      { sigla: "ef_r", desc: "Eficiência (rendimento) da redução", unit: "-", io: "in" },
+      { sigla: "ef_a", desc: "Eficiência (rendimento) do acoplamento", unit: "-", io: "in" },
+      { sigla: "n_ac", desc: "Número de conjuntos de acionamento", unit: "-", io: "in" },
+    ]},
+    { cat: "DADOS DE SAÍDA", items: [
+      { sigla: "V", desc: "Velocidade utilizada no cálculo (máx entre projeto e requerida)", unit: "m/s", io: "out" },
+      { sigla: "Wm", desc: "Peso do material na correia por metro", unit: "kgf/m", io: "out" },
+      { sigla: "Ky", desc: "Fator de resistência ref. à correia, material e roletes (CEMA Tab. 6-2)", unit: "-", io: "out" },
+      { sigla: "Kx", desc: "Fator de resistência ref. aos roletes e correia", unit: "-", io: "out" },
+      { sigla: "Fg", desc: "Força para vencer atrito do material com guias laterais", unit: "kgf", io: "out" },
+      { sigla: "F1", desc: "Força para vencer atrito dos raspadores/limpadores", unit: "kgf", io: "out" },
+      { sigla: "Fa", desc: "Força para acelerar o material da velocidade zero à velocidade da correia", unit: "kgf", io: "out" },
+      { sigla: "Ta", desc: "Somatório das forças para vencer atrito e acelerar", unit: "kgf", io: "out" },
+      { sigla: "Te", desc: "Tensão efetiva na correia (força motriz necessária)", unit: "kgf", io: "out" },
+      { sigla: "Ne", desc: "Potência efetiva no eixo do tambor", unit: "HP", io: "out" },
+      { sigla: "N_hp", desc: "Potência total do motor (considerando rendimentos)", unit: "HP", io: "out" },
+      { sigla: "N_cv", desc: "Potência total do motor em cavalo-vapor", unit: "CV", io: "out" },
+      { sigla: "N_kw", desc: "Potência total do motor em quilowatts", unit: "kW", io: "out" },
+      { sigla: "N_per", desc: "Potência por acionamento", unit: "HP", io: "out" },
+      { sigla: "Cw", desc: "Fator de enrolamento (wrap factor) do tambor motriz", unit: "-", io: "out" },
+      { sigla: "T1", desc: "Tensão no lado tenso da correia", unit: "kgf", io: "out" },
+      { sigla: "T2", desc: "Tensão no lado frouxo da correia", unit: "kgf", io: "out" },
+      { sigla: "Tad", desc: "Tensão admissível da correia", unit: "kgf", io: "out" },
+      { sigla: "T_sag", desc: "Tensão mínima para atender critério de flecha (sag)", unit: "kgf", io: "out" },
+      { sigla: "red", desc: "Relação de redução do redutor", unit: ":1", io: "out" },
+    ]},
+  ],
+  silo: [
+    { cat: "DADOS DE ENTRADA", items: [
+      { sigla: "density", desc: "Densidade do material armazenado", unit: "kg/m³", io: "in" },
+      { sigla: "z", desc: "Profundidade abaixo da superfície da pilha", unit: "m", io: "in" },
+      { sigla: "b", desc: "Largura da seção plana das paredes verticais", unit: "m", io: "in" },
+      { sigla: "c", desc: "Comprimento da seção plana das paredes verticais", unit: "m", io: "in" },
+      { sigla: "β", desc: "Ângulo de inclinação da parede do silo (tremonha)", unit: "°", io: "in" },
+      { sigla: "hh", desc: "Distância entre fundo do silo e região de transição", unit: "m", io: "in" },
+      { sigla: "aK", desc: "Coeficiente de modificação da taxa de pressão lateral (Eurocode Tab. E.1)", unit: "-", io: "in" },
+      { sigla: "Km", desc: "Valor característico médio da taxa de pressão lateral", unit: "-", io: "in" },
+      { sigla: "aμ", desc: "Coeficiente de modificação do fator de atrito na parede", unit: "-", io: "in" },
+      { sigla: "μm", desc: "Valor característico médio do coeficiente de atrito parede", unit: "-", io: "in" },
+      { sigla: "aφ", desc: "Coeficiente de modificação do ângulo de atrito interno", unit: "-", io: "in" },
+      { sigla: "φim", desc: "Ângulo médio de atrito interno do sólido", unit: "°", io: "in" },
+      { sigla: "Cb", desc: "Amplificador de carga no fundo do silo (Eurocode §6.1.2)", unit: "-", io: "in" },
+    ]},
+    { cat: "DADOS DE SAÍDA", items: [
+      { sigla: "K", desc: "Valor característico da taxa de pressão lateral (K = Km/aK)", unit: "-", io: "out" },
+      { sigla: "μ", desc: "Valor característico do coeficiente de atrito na parede (μ = μm/aμ)", unit: "-", io: "out" },
+      { sigla: "z₀", desc: "Profundidade característica de Janssen", unit: "m", io: "out" },
+      { sigla: "Yj", desc: "Função de Janssen para variação de pressão", unit: "-", io: "out" },
+      { sigla: "U", desc: "Perímetro interno da seção plana", unit: "m", io: "out" },
+      { sigla: "A", desc: "Área da seção plana do segmento de paredes verticais", unit: "m²", io: "out" },
+      { sigla: "ph₀", desc: "Pressão horizontal assintótica (Eurocode Eq. 5.2)", unit: "N/m²", io: "out" },
+      { sigla: "pvf", desc: "Tensão vertical no sólido após enchimento (Eq. 5.5)", unit: "N/m²", io: "out" },
+      { sigla: "pvft", desc: "Pressão vertical durante enchimento (pvf × Cb)", unit: "N/m²", io: "out" },
+      { sigla: "pne", desc: "Pressão normal na parede durante descarga (Eq. 6.8)", unit: "N/m²", io: "out" },
+    ]},
+  ],
+  moto: [
+    { cat: "DADOS DE ENTRADA", items: [
+      { sigla: "cap_m3h", desc: "Capacidade de alimentação", unit: "m³/h", io: "in" },
+      { sigla: "larg_m", desc: "Largura da calha vibratória", unit: "m", io: "in" },
+      { sigla: "comp_m", desc: "Comprimento da calha vibratória", unit: "m", io: "in" },
+      { sigla: "alt_m", desc: "Altura da calha (seção de saída)", unit: "m", io: "in" },
+      { sigla: "ang_deg", desc: "Ângulo de inclinação da calha", unit: "°", io: "in" },
+      { sigla: "fv", desc: "Fator de velocidade em função do ângulo (1.3 p/ 10°, 2.7 p/ 30°)", unit: "-", io: "in" },
+      { sigla: "peso_conj", desc: "Peso próprio do conjunto da calha (calha + motovibradores)", unit: "kgf", io: "in" },
+      { sigla: "rpm", desc: "Rotação especificada do motor do motovibrador", unit: "rpm", io: "in" },
+      { sigla: "torque_disp", desc: "Torque de serviço disponível por motovibrador", unit: "kgf.cm", io: "in" },
+      { sigla: "n_mot", desc: "Número de motovibradores por calha", unit: "-", io: "in" },
+    ]},
+    { cat: "DADOS DE SAÍDA", items: [
+      { sigla: "vel_cm", desc: "Velocidade de projeto de alimentação", unit: "cm/s", io: "out" },
+      { sigla: "freq", desc: "Frequência do motor (Fm = rpm/60)", unit: "Hz", io: "out" },
+      { sigla: "amp", desc: "Amplitude requerida de vibração", unit: "cm", io: "out" },
+      { sigla: "acel", desc: "Aceleração requerida", unit: "cm/s²", io: "out" },
+      { sigla: "mult_g", desc: "Multiplicador da aceleração gravitacional (aceleração em g)", unit: "g", io: "out" },
+      { sigla: "torque_total", desc: "Torque total requerido para o sistema", unit: "kgf.cm", io: "out" },
+      { sigla: "torque_mot", desc: "Torque requerido por motovibrador", unit: "kgf.cm", io: "out" },
+      { sigla: "margem", desc: "Margem percentual entre torque disponível e requerido", unit: "%", io: "out" },
+    ]},
+  ],
+  pistao: [
+    { cat: "DADOS DE ENTRADA", items: [
+      { sigla: "p_bar", desc: "Pressão máxima de trabalho da unidade hidráulica", unit: "bar", io: "in" },
+      { sigla: "Aa_cm2", desc: "Área útil no pistão para atuação (lado do êmbolo)", unit: "cm²", io: "in" },
+      { sigla: "Ar_cm2", desc: "Área útil no pistão para retorno (lado da haste)", unit: "cm²", io: "in" },
+      { sigla: "curso_mm", desc: "Curso máximo do pistão", unit: "mm", io: "in" },
+      { sigla: "t_ab", desc: "Tempo de abertura da comporta", unit: "s", io: "in" },
+      { sigla: "peso_kg", desc: "Peso próprio da comporta", unit: "kg", io: "in" },
+      { sigla: "n_rodas", desc: "Número de rodas de translação da comporta", unit: "-", io: "in" },
+      { sigla: "μ_rod", desc: "Coeficiente de atrito nas rodas de translação", unit: "-", io: "in" },
+      { sigla: "larg_m", desc: "Largura da saída de material", unit: "m", io: "in" },
+      { sigla: "comp_m", desc: "Comprimento da saída de material", unit: "m", io: "in" },
+      { sigla: "pn_Nm2", desc: "Pressão normal exercida pelo material (calculada no módulo Silo)", unit: "N/m²", io: "in" },
+      { sigla: "n_pist", desc: "Número de pistões atuando na comporta", unit: "-", io: "in" },
+    ]},
+    { cat: "DADOS DE SAÍDA", items: [
+      { sigla: "Fa", desc: "Força de atuação do cilindro (avanço)", unit: "kN", io: "out" },
+      { sigla: "Fr", desc: "Força de retorno do cilindro (recuo)", unit: "kN", io: "out" },
+      { sigla: "vel", desc: "Velocidade de abertura da comporta", unit: "m/s", io: "out" },
+      { sigla: "F máx", desc: "Força máxima necessária (material + atrito) no instante t=0", unit: "kN", io: "out" },
+      { sigla: "F disp", desc: "Força disponível total dos pistões", unit: "kN", io: "out" },
+      { sigla: "FS", desc: "Fator de segurança (F disponível / F máxima). Mínimo: 1.2", unit: "-", io: "out" },
+    ]},
+  ],
+};
+
+// ============================================================
+// COMPONENTE: PAINEL DE GLOSSÁRIO (lado direito)
+// ============================================================
+function GlossaryPanel({ moduleId, visible, onClose }: { moduleId: string; visible: boolean; onClose: () => void }) {
+  const glossary = GLOSSARY[moduleId] || [];
+  if (!visible) return null;
+
+  return (
+    <div style={{
+      width: "300px", flexShrink: 0, background: C.s1, borderLeft: `1px solid ${C.border}`,
+      padding: "14px", overflowY: "auto", maxHeight: "calc(100vh - 40px)", fontSize: "11px",
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+        <div style={{ fontSize: "10px", fontWeight: 600, color: C.accent, letterSpacing: "1.5px", textTransform: "uppercase" }}>
+          Glossário de Siglas
+        </div>
+        <button onClick={onClose} style={{ background: "none", border: "none", color: C.dim, cursor: "pointer", fontSize: "14px", fontFamily: "inherit" }}>✕</button>
+      </div>
+
+      {glossary.map((cat, ci) => (
+        <div key={ci} style={{ marginBottom: "16px" }}>
+          <div style={{
+            fontSize: "9px", fontWeight: 600, color: cat.cat.includes("SAÍDA") ? C.success : C.warn,
+            letterSpacing: "1px", marginBottom: "8px", padding: "4px 8px",
+            background: cat.cat.includes("SAÍDA") ? "rgba(63,185,80,0.06)" : "rgba(210,153,34,0.06)",
+            borderRadius: "3px", border: `1px solid ${cat.cat.includes("SAÍDA") ? C.success + "22" : C.warn + "22"}`,
+          }}>
+            {cat.cat}
+          </div>
+          {cat.items.map((item, ii) => (
+            <div key={ii} style={{
+              padding: "6px 8px", marginBottom: "4px", borderRadius: "4px",
+              background: ii % 2 === 0 ? "transparent" : C.s2 + "44",
+              borderLeft: `2px solid ${item.io === "in" ? C.warn + "44" : C.success + "44"}`,
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <span style={{ fontWeight: 600, color: C.accent, fontSize: "10px", fontFamily: "'IBM Plex Mono', monospace" }}>{item.sigla}</span>
+                {item.unit && <span style={{ fontSize: "8px", color: C.muted, background: C.s3, padding: "1px 4px", borderRadius: "2px" }}>{item.unit}</span>}
+              </div>
+              <div style={{ fontSize: "9px", color: C.dim, marginTop: "2px", lineHeight: "1.4" }}>{item.desc}</div>
+            </div>
+          ))}
+        </div>
+      ))}
+
+      <div style={{ marginTop: "12px", padding: "8px", background: C.accentDim, borderRadius: "4px", fontSize: "9px", color: C.dim, lineHeight: "1.5" }}>
+        <span style={{ color: C.warn }}>■</span> Entrada &nbsp;
+        <span style={{ color: C.success }}>■</span> Saída &nbsp;
+        <br />Ref: EN 1991-4 · CEMA 7th · FAÇO · Vimot
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// COMPONENTE: LISTA DE CÁLCULOS SALVOS (dropdown)
+// ============================================================
+function SavedCalcsDropdown({ user, onLoad, moduleType }: { user: AnyDict; onLoad: (data: AnyDict) => void; moduleType: string }) {
+  const [open, setOpen] = useState(false);
+  const [calcs, setCalcs] = useState<AnyDict[]>([]);
+  const [loading, setLoading] = useState(false);
+  const dropRef = useRef<HTMLDivElement>(null);
+
+  const loadCalcs = async () => {
+    setLoading(true);
+    const keys = await STORAGE.list(`p:${user.email}:`);
+    const items: AnyDict[] = [];
+    for (const k of keys) {
+      const data = await STORAGE.get(k);
+      if (data && data.type === moduleType) {
+        items.push({ ...data, _key: k });
+      }
+    }
+    items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+    setCalcs(items);
+    setLoading(false);
+  };
+
+  const toggle = async () => {
+    if (!open) await loadCalcs();
+    setOpen(!open);
+  };
+
+  const handleDelete = async (key: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    await STORAGE.delete(key);
+    setCalcs(prev => prev.filter(c => c._key !== key));
+  };
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (dropRef.current && !dropRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const moduleLabels: AnyDict = { tc: "Transportador", silo: "Silo", moto: "Motovibrador", pistao: "Pistão" };
+
+  return (
+    <div ref={dropRef} style={{ position: "relative" }}>
+      <button onClick={toggle} style={{
+        ...sty.btn("g"), fontSize: "9px", padding: "6px 12px",
+        display: "flex", alignItems: "center", gap: "4px",
+      }}>
+        <span style={{ fontSize: "11px" }}>📂</span> Abrir Salvo
+        <span style={{ fontSize: "8px", color: C.muted }}>▼</span>
+      </button>
+
+      {open && (
+        <div style={{
+          position: "absolute", top: "100%", right: 0, marginTop: "6px", zIndex: 150,
+          width: "320px", maxHeight: "400px", overflowY: "auto",
+          background: C.s1, border: `1px solid ${C.border}`, borderRadius: "6px",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+        }}>
+          <div style={{ padding: "10px 14px", borderBottom: `1px solid ${C.border}`, fontSize: "10px", color: C.accent, fontWeight: 600, letterSpacing: "1px" }}>
+            CÁLCULOS SALVOS — {moduleLabels[moduleType] || moduleType}
+          </div>
+
+          {loading ? (
+            <div style={{ padding: "20px", textAlign: "center", color: C.dim, fontSize: "10px" }}>Carregando...</div>
+          ) : calcs.length === 0 ? (
+            <div style={{ padding: "20px", textAlign: "center", color: C.muted, fontSize: "10px" }}>
+              Nenhum cálculo salvo para este módulo
+            </div>
+          ) : (
+            calcs.map((calc, i) => (
+              <div key={i}
+                onClick={() => { onLoad(calc); setOpen(false); }}
+                style={{
+                  padding: "10px 14px", cursor: "pointer", borderBottom: `1px solid ${C.border}`,
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                  transition: "background 0.15s",
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = C.accentDim)}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+              >
+                <div>
+                  <div style={{ fontSize: "11px", fontWeight: 500, color: C.text }}>{calc.name}</div>
+                  <div style={{ fontSize: "9px", color: C.muted, marginTop: "2px" }}>
+                    {new Date(calc.at).toLocaleDateString("pt-BR")} · {new Date(calc.at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                  </div>
+                </div>
+                <button
+                  onClick={(e) => handleDelete(calc._key, e)}
+                  style={{ background: "none", border: "none", color: C.danger, cursor: "pointer", fontSize: "12px", padding: "4px", fontFamily: "inherit" }}
+                  title="Excluir"
+                >✕</button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // --- CONSTANTES DE ESTILO ---
@@ -114,7 +427,7 @@ function calcSilo(inp: AnyDict){
   const S=(b===c)?2:(1+b/c);
   const pvft=pvf*Cb;
   const pne=pvft*K;
-  const curve=[];
+  const curve: AnyDict[]=[];
   for(let zi=0;zi<=z;zi+=z/25){const Yi=1-Math.exp(-zi/z0);curve.push({depth:+zi.toFixed(2),ph:+(gamma*z0*K*Yi).toFixed(0),pv:+(gamma*z0*Yi).toFixed(0)});}
   return{gamma,K,mu,U,A,z0,Yj,pho,pvf,pvft,pne,S,curve};
 }
@@ -130,7 +443,7 @@ function calcMoto(inp: AnyDict){
   const torque_mot=torque_total/n_mot;
   const ok=torque_mot<=torque_disp;
   const margem=(torque_disp-torque_mot)/torque_disp*100;
-  const curve=[];for(let f=5;f<=40;f++){const w2=2*Math.PI*f;const a=(vel_cm/(2*Math.PI*f))*fv;curve.push({freq:f,amplitude:+a.toFixed(3),aceleracao:+(a*w2*w2/981).toFixed(2)});}
+  const curve: AnyDict[]=[];for(let f=5;f<=40;f++){const w2=2*Math.PI*f;const a=(vel_cm/(2*Math.PI*f))*fv;curve.push({freq:f,amplitude:+a.toFixed(3),aceleracao:+(a*w2*w2/981).toFixed(2)});}
   return{vel_cm,freq,amp,acel,mult_g,torque_total,torque_mot,ok,margem,curve};
 }
 
@@ -138,7 +451,7 @@ function calcPist(inp: AnyDict){
   const g=9.81,{p_bar,Aa_cm2,Ar_cm2,t_ab,peso_kg,mu_rod=0.02,larg_m,comp_m,pn_Nm2,n_pist=1}=inp;
   const Fa=p_bar*Aa_cm2/10,Fr=p_bar*Ar_cm2/10;
   const vel=comp_m/t_ab;
-  const steps=[];
+  const steps: AnyDict[]=[];
   for(let i=0;i<=10;i++){const frac=i/10;const ac=comp_m*frac;const ar=larg_m*(comp_m-ac);const fm=pn_Nm2*ar;const at=mu_rod*peso_kg*g;
     steps.push({t:+(t_ab*frac).toFixed(2),comp_ab:+ac.toFixed(3),area_cob:+ar.toFixed(3),forca_mat:+fm.toFixed(0),forca_total:+(fm+at).toFixed(0)});}
   const atrito=mu_rod*peso_kg*g;
@@ -175,7 +488,7 @@ function calcTC(inp: AnyDict){
   const Tad=(cap_tens*(larg_pol*25.4)/1000)/g;
   const contrapeso=2*T2;
   const cap_real=cap_vol*V*mat_d/1000;
-  const curve=[];for(let x=0;x<=comp_m;x+=comp_m/20){curve.push({pos:+x.toFixed(1),T_ida:+(T2+Te*(x/comp_m)).toFixed(0),T_volta:+(T2*(1-x/comp_m*0.1)).toFixed(0)});}
+  const curve: AnyDict[]=[];for(let x=0;x<=comp_m;x+=comp_m/20){curve.push({pos:+x.toFixed(1),T_ida:+(T2+Te*(x/comp_m)).toFixed(0),T_volta:+(T2*(1-x/comp_m*0.1)).toFixed(0)});}
   return{Wm,Ky,Kx,lambda_d,Fg,F1,Fa,Ta,Ft,Te,Ne_hp,N_hp,N_cv,N_kw,N_per,ef_t,n_sinc,n_mot,n_tamb,red,Cw,T1,T2,T_sag,Tad,contrapeso,cap_vol,cap_real,cap_ok:cap_real>=cap_th,V,curve,tension_ok:T1<=Tad};
 }
 
@@ -384,17 +697,25 @@ function Tabs({tab,setTab}: TabsProps){
   </div>);
 }
 
-interface ModProps {onSave: (d: AnyDict) => void;}
-function SiloMod({onSave}: ModProps){
+// UPDATED: ModProps now includes user and onLoadSaved
+interface ModProps {onSave: (d: AnyDict) => void; user?: AnyDict;}
+
+function SiloMod({onSave, user}: ModProps){
   const[mat,setMat]=useState("carvao");
   const[inp,setI]=useState({density:900,z:12.7,b:8.8,c:8.8,beta_deg:22.5,aK:1.15,Km:0.52,au:1.12,um:0.49,aphi:1.16,phim_deg:31,Cb:1.6,hh:9.3});
   const[res,setR]=useState<AnyDict | null>(null);const[tab,setTab]=useState(0);
   const s=(k: string,v: any)=>setI(p=>({...p,[k]:v}));
   const updMat=(k: string)=>{setMat(k);if(k!=="custom"){const m=MATS[k];setI(p=>({...p,density:m.d,aK:m.aK,Km:m.Km,au:m.au,um:m.um,aphi:m.aphi,phim_deg:m.phim}))}};
+  const handleLoad = (data: AnyDict) => { if (data.inp) setI(data.inp); if (data.res) setR(data.res); };
+
   return(<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
       <div><h2 style={{margin:0,fontSize:"14px",fontWeight:700}}>Pressão em Silos</h2><div style={{fontSize:"9px",color:C.muted,marginTop:"2px"}}>EN 1991-4 — Validado ✓</div></div>
-      <div style={{display:"flex",gap:"6px"}}><button onClick={()=>onSave({type:"silo",inp,res})} style={sty.btn("g")}>Salvar</button><button onClick={()=>setR(calcSilo(inp))} style={sty.btn("p")}>CALCULAR</button></div>
+      <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+        {user && <SavedCalcsDropdown user={user} moduleType="silo" onLoad={handleLoad} />}
+        <button onClick={()=>onSave({type:"silo",inp,res})} style={sty.btn("g")}>Salvar</button>
+        <button onClick={()=>setR(calcSilo(inp))} style={sty.btn("p")}>CALCULAR</button>
+      </div>
     </div>
     <Tabs tab={tab} setTab={setTab}/>
     {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Material</div><Sel label="Material" value={mat} onChange={updMat} options={Object.entries(MATS).map(([k,v])=>({v:k,l:v.n}))}/><div style={sty.grid(3)}><Inp label="Densidade" value={inp.density} onChange={(v:any)=>s("density",v)} unit="kg/m³"/><Inp label="z" value={inp.z} onChange={(v:any)=>s("z",v)} unit="m"/><Inp label="Cb" value={inp.Cb} onChange={(v:any)=>s("Cb",v)}/></div></div>
@@ -414,13 +735,17 @@ function SiloMod({onSave}: ModProps){
   </div>);
 }
 
-function MotoMod({onSave}: ModProps){
+function MotoMod({onSave, user}: ModProps){
   const[inp,setI]=useState({cap_m3h:395,larg_m:1.99,comp_m:1.14,alt_m:0.16,ang_deg:30,peso_calha:315.8,peso_conj:660.3,rpm:1150,torque_disp:260,n_mot:2,fv:2.7});
   const[res,setR]=useState<AnyDict | null>(null);const[tab,setTab]=useState(0);const s=(k:string,v:any)=>setI(p=>({...p,[k]:v}));
+  const handleLoad = (data: AnyDict) => { if (data.inp) setI(data.inp); if (data.res) setR(data.res); };
   return(<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
       <div><h2 style={{margin:0,fontSize:"14px",fontWeight:700}}>Motovibrador</h2><div style={{fontSize:"9px",color:C.muted,marginTop:"2px"}}>Calhas vibratórias — Validado ✓</div></div>
-      <div style={{display:"flex",gap:"6px"}}><button onClick={()=>onSave({type:"moto",inp,res})} style={sty.btn("g")}>Salvar</button><button onClick={()=>setR(calcMoto(inp))} style={sty.btn("p")}>CALCULAR</button></div>
+      <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+        {user && <SavedCalcsDropdown user={user} moduleType="moto" onLoad={handleLoad} />}
+        <button onClick={()=>onSave({type:"moto",inp,res})} style={sty.btn("g")}>Salvar</button><button onClick={()=>setR(calcMoto(inp))} style={sty.btn("p")}>CALCULAR</button>
+      </div>
     </div>
     <Tabs tab={tab} setTab={setTab}/>
     {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Calha</div><div style={sty.grid(3)}><Inp label="Capacidade" value={inp.cap_m3h} onChange={(v:any)=>s("cap_m3h",v)} unit="m³/h"/><Inp label="Largura" value={inp.larg_m} onChange={(v:any)=>s("larg_m",v)} unit="m"/><Inp label="Comprimento" value={inp.comp_m} onChange={(v:any)=>s("comp_m",v)} unit="m"/><Inp label="Altura" value={inp.alt_m} onChange={(v:any)=>s("alt_m",v)} unit="m"/><Inp label="Ângulo" value={inp.ang_deg} onChange={(v:any)=>s("ang_deg",v)} unit="°"/><Inp label="Fator vel." value={inp.fv} onChange={(v:any)=>s("fv",v)}/></div></div>
@@ -441,13 +766,17 @@ function MotoMod({onSave}: ModProps){
   </div>);
 }
 
-function PistMod({onSave}: ModProps){
+function PistMod({onSave, user}: ModProps){
   const[inp,setI]=useState({p_bar:140,Aa_cm2:50.26,Ar_cm2:25.63,curso_mm:1600,t_ab:2.9,peso_kg:1097,n_rodas:8,mu_rod:0.02,larg_m:1.6,comp_m:1.1,pn_Nm2:170000,n_pist:1});
   const[res,setR]=useState<AnyDict | null>(null);const[tab,setTab]=useState(0);const s=(k:string,v:any)=>setI(p=>({...p,[k]:v}));
+  const handleLoad = (data: AnyDict) => { if (data.inp) setI(data.inp); if (data.res) setR(data.res); };
   return(<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
       <div><h2 style={{margin:0,fontSize:"14px",fontWeight:700}}>Pistão de Abertura</h2><div style={{fontSize:"9px",color:C.muted,marginTop:"2px"}}>Cilindros hidráulicos — Validado ✓</div></div>
-      <div style={{display:"flex",gap:"6px"}}><button onClick={()=>onSave({type:"pistao",inp,res})} style={sty.btn("g")}>Salvar</button><button onClick={()=>setR(calcPist(inp))} style={sty.btn("p")}>CALCULAR</button></div>
+      <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+        {user && <SavedCalcsDropdown user={user} moduleType="pistao" onLoad={handleLoad} />}
+        <button onClick={()=>onSave({type:"pistao",inp,res})} style={sty.btn("g")}>Salvar</button><button onClick={()=>setR(calcPist(inp))} style={sty.btn("p")}>CALCULAR</button>
+      </div>
     </div>
     <Tabs tab={tab} setTab={setTab}/>
     {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Cilindro</div><div style={sty.grid(3)}><Inp label="Pressão UH" value={inp.p_bar} onChange={(v:any)=>s("p_bar",v)} unit="bar"/><Inp label="Área atuação" value={inp.Aa_cm2} onChange={(v:any)=>s("Aa_cm2",v)} unit="cm²"/><Inp label="Área retorno" value={inp.Ar_cm2} onChange={(v:any)=>s("Ar_cm2",v)} unit="cm²"/><Inp label="Curso" value={inp.curso_mm} onChange={(v:any)=>s("curso_mm",v)} unit="mm"/><Inp label="Tempo abert." value={inp.t_ab} onChange={(v:any)=>s("t_ab",v)} unit="s"/><Inp label="Nº pistões" value={inp.n_pist} onChange={(v:any)=>s("n_pist",v)}/></div></div>
@@ -470,13 +799,17 @@ function PistMod({onSave}: ModProps){
   </div>);
 }
 
-function TCMod({onSave}: ModProps){
+function TCMod({onSave, user}: ModProps){
   const[inp,setI]=useState({mat_d:900,cap_th:3240,vel_ms:2.5,comp_m:19.6,elev_m:0,larg_pol:72,ang_rol:20,esp_rol:0.5,d_tamb_mm:630,ang_abr:180,n_limp:2,Wb:59.56,n_lonas:4,cap_tens:86298.5,idler_cl:"D",freq_hz:60,n_polos:4,p_rol_carga:40.01,p_rol_ret:26.8,comp_guias:16,Cs:0.0754,Ft_flex:40.8,ef_c:0.94,ef_r:0.94,ef_a:0.96,n_ac:2});
   const[res,setR]=useState<AnyDict | null>(null);const[tab,setTab]=useState(0);const s=(k:string,v:any)=>setI(p=>({...p,[k]:v}));
+  const handleLoad = (data: AnyDict) => { if (data.inp) setI(data.inp); if (data.res) setR(data.res); };
   return(<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
       <div><h2 style={{margin:0,fontSize:"14px",fontWeight:700}}>Transportador de Correia</h2><div style={{fontSize:"9px",color:C.muted,marginTop:"2px"}}>CEMA 7th Ed. — Validado ✓</div></div>
-      <div style={{display:"flex",gap:"6px"}}><button onClick={()=>onSave({type:"tc",inp,res})} style={sty.btn("g")}>Salvar</button><button onClick={()=>setR(calcTC(inp))} style={sty.btn("p")}>CALCULAR</button></div>
+      <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+        {user && <SavedCalcsDropdown user={user} moduleType="tc" onLoad={handleLoad} />}
+        <button onClick={()=>onSave({type:"tc",inp,res})} style={sty.btn("g")}>Salvar</button><button onClick={()=>setR(calcTC(inp))} style={sty.btn("p")}>CALCULAR</button>
+      </div>
     </div>
     <Tabs tab={tab} setTab={setTab}/>
     {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Material e Capacidade</div><div style={sty.grid(4)}><Inp label="Densidade" value={inp.mat_d} onChange={(v:any)=>s("mat_d",v)} unit="kg/m³"/><Inp label="Capacidade" value={inp.cap_th} onChange={(v:any)=>s("cap_th",v)} unit="t/h"/><Inp label="Velocidade" value={inp.vel_ms} onChange={(v:any)=>s("vel_ms",v)} unit="m/s"/><Inp label="Nº acion." value={inp.n_ac} onChange={(v:any)=>s("n_ac",v)}/></div></div>
@@ -510,19 +843,46 @@ function TCMod({onSave}: ModProps){
   </div>);
 }
 
-// --- APP PRINCIPAL ---
+// ============================================================
+// APP PRINCIPAL — com Glossário lateral e notificação de registro
+// ============================================================
 export default function App(){
   const[user,setUser]=useState<AnyDict | null>(null);const[mod,setMod]=useState("tc");const[sec,setSec]=useState("mod");
   const[saveM,setSaveM]=useState<AnyDict | null>(null);const[pName,setPName]=useState("");const[toast,setToast]=useState<string | null>(null);
   const[lm,setLm]=useState("login");const[em,setEm]=useState("");const[pw,setPw]=useState("");const[nm,setNm]=useState("");const[er,setEr]=useState("");
+  const[showGlossary,setShowGlossary]=useState(false);
 
   useEffect(()=>{(async()=>{const s=await STORAGE.get("sess:v3");if(s)setUser(s)})()},[]);
-  const login=async()=>{if(!em||!pw){setEr("Preencha todos os campos");return}
-    if(lm==="register"){if(!nm){setEr("Informe nome");return}const u={email:em,name:nm,pass:pw,createdAt:new Date().toISOString()};await STORAGE.set(`u:${em}`,u);await STORAGE.set("sess:v3",u);setUser(u)}
-    else{const u=await STORAGE.get(`u:${em}`);if(!u||u.pass!==pw){setEr("Credenciais inválidas");return}await STORAGE.set("sess:v3",u);setUser(u)}};
+
+  const login=async()=>{
+    if(!em||!pw){setEr("Preencha todos os campos");return}
+    if(lm==="register"){
+      if(!nm){setEr("Informe nome");return}
+      const u={email:em,name:nm,pass:pw,createdAt:new Date().toISOString()};
+      await STORAGE.set(`u:${em}`,u);
+      await STORAGE.set("sess:v3",u);
+      // ★ NOTIFICA O OWNER sobre novo registro
+      await notifyOwnerNewUser(u);
+      setUser(u);
+    } else {
+      const u=await STORAGE.get(`u:${em}`);
+      if(!u||u.pass!==pw){setEr("Credenciais inválidas");return}
+      await STORAGE.set("sess:v3",u);
+      setUser(u);
+    }
+  };
+
   const logout=async()=>{await STORAGE.delete("sess:v3");setUser(null)};
+
   const save=(d: AnyDict)=>{setSaveM(d);setPName(`${d.type}_${new Date().toISOString().slice(0,10)}`)};
-  const confirmSave=async()=>{if(!pName)return;if(user) await STORAGE.set(`p:${user.email}:${Date.now()}`,{...saveM,name:pName,at:new Date().toISOString()});setSaveM(null);setToast("Salvo!");setTimeout(()=>setToast(null),2e3)};
+
+  const confirmSave=async()=>{
+    if(!pName||!user)return;
+    await STORAGE.set(`p:${user.email}:${Date.now()}`,{...saveM,name:pName,at:new Date().toISOString()});
+    setSaveM(null);
+    setToast("Cálculo salvo! Acesse pelo botão 📂 Abrir Salvo");
+    setTimeout(()=>setToast(null),3000);
+  };
 
   if(!user)return(
     <div style={{minHeight:"100vh",background:"radial-gradient(ellipse at 30% 20%,#0d1117,#060a10 70%)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'IBM Plex Mono',monospace",color:C.text}}>
@@ -547,10 +907,18 @@ export default function App(){
 
   return(<div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'IBM Plex Mono',monospace",fontSize:"12px"}}>
     <div style={{background:C.s1,borderBottom:`1px solid ${C.border}`,padding:"8px 18px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100}}>
-      <div style={{display:"flex",alignItems:"center",gap:"8px"}}><div style={{fontSize:"14px",fontWeight:800,letterSpacing:"2px",background:"linear-gradient(135deg,#58a6ff,#79c0ff)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>ENGCALC PRO</div><span style={{fontSize:"8px",color:C.muted}}>v2.0</span></div>
-      <div style={{display:"flex",alignItems:"center",gap:"6px"}}><span style={{fontSize:"10px",color:C.dim}}>{user.name}</span><button onClick={logout} style={{...sty.btn("g"),fontSize:"9px",padding:"4px 10px"}}>Sair</button></div>
+      <div style={{display:"flex",alignItems:"center",gap:"8px"}}><div style={{fontSize:"14px",fontWeight:800,letterSpacing:"2px",background:"linear-gradient(135deg,#58a6ff,#79c0ff)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>ENGCALC PRO</div><span style={{fontSize:"8px",color:C.muted}}>v2.1</span></div>
+      <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
+        {/* ★ BOTÃO GLOSSÁRIO */}
+        <button onClick={()=>setShowGlossary(!showGlossary)} style={{...sty.btn("g"),fontSize:"9px",padding:"4px 10px",background:showGlossary?C.accentDim:"transparent"}} title="Glossário de Siglas">
+          {showGlossary ? "✕ Glossário" : "📖 Glossário"}
+        </button>
+        <span style={{fontSize:"10px",color:C.dim}}>{user.name}</span>
+        <button onClick={logout} style={{...sty.btn("g"),fontSize:"9px",padding:"4px 10px"}}>Sair</button>
+      </div>
     </div>
     <div style={{display:"flex",minHeight:"calc(100vh - 40px)"}}>
+      {/* SIDEBAR ESQUERDA */}
       <div style={{width:"180px",background:C.s1,borderRight:`1px solid ${C.border}`,padding:"12px",flexShrink:0}}>
         <div style={{fontSize:"8px",color:C.muted,letterSpacing:"2px",marginBottom:"8px"}}>NAVEGAÇÃO</div>
         {[{id:"mod",l:"Módulos"},{id:"valid",l:"Validação"},{id:"admin",l:"Conta"}].map(s2=>(
@@ -562,11 +930,13 @@ export default function App(){
               <div style={{display:"flex",alignItems:"center",gap:"6px"}}><span style={{color:m.col,fontSize:"12px"}}>{m.ic}</span><div><div style={{fontSize:"10px",fontWeight:mod===m.id?600:400,color:mod===m.id?C.text:C.dim}}>{m.n}</div><div style={{fontSize:"7px",color:C.muted}}>{m.s}</div></div></div></div>))}</>}
         <div style={{marginTop:"16px",paddingTop:"10px",borderTop:`1px solid ${C.border}`,fontSize:"7px",color:C.muted,lineHeight:"1.8"}}>EN 1991-4 · CEMA 7th<br/>NBR 8400 · FAÇO · Vimot<br/><span style={{color:C.accent}}>Validado ✓</span></div>
       </div>
+
+      {/* ÁREA CENTRAL */}
       <div style={{flex:1,padding:"18px",maxWidth:"920px",overflowY:"auto"}}>
-        {sec==="mod"&&mod==="silo"&&<SiloMod onSave={save}/>}
-        {sec==="mod"&&mod==="moto"&&<MotoMod onSave={save}/>}
-        {sec==="mod"&&mod==="pistao"&&<PistMod onSave={save}/>}
-        {sec==="mod"&&mod==="tc"&&<TCMod onSave={save}/>}
+        {sec==="mod"&&mod==="silo"&&<SiloMod onSave={save} user={user}/>}
+        {sec==="mod"&&mod==="moto"&&<MotoMod onSave={save} user={user}/>}
+        {sec==="mod"&&mod==="pistao"&&<PistMod onSave={save} user={user}/>}
+        {sec==="mod"&&mod==="tc"&&<TCMod onSave={save} user={user}/>}
         {sec==="valid"&&<ValPanel/>}
         {sec==="admin"&&<div style={sty.card}><div style={sty.cardT}>Conta</div><div style={sty.grid(2)}>
           <div><div style={{fontSize:"8px",color:C.muted}}>NOME</div><div style={{marginTop:"3px"}}>{user.name}</div></div>
@@ -575,10 +945,19 @@ export default function App(){
           <div><div style={{fontSize:"8px",color:C.muted}}>MÓDULOS</div><div style={{marginTop:"3px"}}>4/4 ativos</div></div>
         </div></div>}
       </div>
+
+      {/* ★ PAINEL DE GLOSSÁRIO (lado direito) */}
+      {sec==="mod" && <GlossaryPanel moduleId={mod} visible={showGlossary} onClose={()=>setShowGlossary(false)} />}
     </div>
+
+    {/* Modal de salvar */}
     {saveM&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
-      <div style={{...sty.card,width:"350px"}}><div style={sty.cardT}>Salvar Projeto</div><Inp label="Nome" value={pName} onChange={setPName} type="text"/>
+      <div style={{...sty.card,width:"350px"}}><div style={sty.cardT}>Salvar Cálculo</div>
+      <Inp label="Nome do cálculo" value={pName} onChange={setPName} type="text"/>
+      <div style={{fontSize:"9px",color:C.dim,margin:"8px 0"}}>O cálculo ficará acessível pelo botão <strong style={{color:C.accent}}>📂 Abrir Salvo</strong> dentro do módulo correspondente.</div>
       <div style={{display:"flex",gap:"6px",justifyContent:"flex-end",marginTop:"10px"}}><button onClick={()=>setSaveM(null)} style={sty.btn("g")}>Cancelar</button><button onClick={confirmSave} style={sty.btn("p")}>Salvar</button></div></div></div>}
+
+    {/* Toast */}
     {toast&&<div style={{position:"fixed",bottom:"16px",right:"16px",padding:"8px 16px",background:C.success,color:"#fff",borderRadius:"4px",fontSize:"11px",fontWeight:600,zIndex:300}}>{toast}</div>}
   </div>);
 }
