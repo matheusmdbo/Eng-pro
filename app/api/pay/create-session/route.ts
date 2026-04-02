@@ -1,49 +1,31 @@
-import Stripe from "stripe";
-import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient } from '@/lib/supabase/server'
+import Stripe from 'stripe'
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2026-03-25.dahlia' })
+
+const supabase = createClient()
 
 export async function POST(req: Request) {
-  const supabase = createClient();
+  const { moduleId, moduleName, priceInCents } = await req.json()
+  const { data: { user } } = await supabase.auth.getUser()
 
-  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return new Response(JSON.stringify({ error: 'Não autorizado' }), { status: 401 })
 
-  if (!user) {
-    return NextResponse.json(
-      { error: "Não autorizado" },
-      { status: 401 }
-    );
-  }
-  try {
-    const { moduleId, moduleName, priceInCents } = await req.json();
-
-const session = await stripe.checkout.sessions.create({
-  payment_method_types: ["card"],
-  line_items: [
-    {
+  const session = await stripe.checkout.sessions.create({
+    payment_method_types: ['card'],
+    line_items: [{
       price_data: {
-        currency: "brl",
-        product_data: {
-          name: moduleName,
-        },
+        currency: 'brl',
+        product_data: { name: moduleName },
         unit_amount: priceInCents,
       },
       quantity: 1,
-    },
-  ],
-  mode: "payment",
-  metadata: {
-    moduleId,
-    userId: user.id,
-  },
-  success_url: `${process.env.NEXT_PUBLIC_BASE_URL}/success`,
-  cancel_url: `${process.env.NEXT_PUBLIC_BASE_URL}/cancel`,
-});
+    }],
+    mode: 'payment',
+    metadata: { moduleId, userId: user.id },
+    success_url: `${process.env.NEXT_PUBLIC_BASE_URL}/success`,
+    cancel_url: `${process.env.NEXT_PUBLIC_BASE_URL}/cancel`,
+  })
 
-    return NextResponse.json({ url: session.url });
-  } catch (error) {
-    console.error("Stripe Session Error:", error);
-    return NextResponse.json({ error: "Erro ao criar sessão de pagamento." }, { status: 500 });
-  }
+  return new Response(JSON.stringify({ url: session.url }), { status: 200 })
 }
