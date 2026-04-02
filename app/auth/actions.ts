@@ -1,54 +1,57 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { headers } from 'next/headers'
+import { redirect } from 'next/navigation'
 
 export async function login(formData: FormData) {
   const supabase = createClient()
+  const email = formData.get('email') as string
+  const password = formData.get('password') as string
 
-  const data = {
-    email: formData.get('email') as string,
-    password: formData.get('password') as string,
-  }
-
-  const { error } = await supabase.auth.signInWithPassword(data)
+  const { error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  })
 
   if (error) {
-    return redirect('/?error=' + encodeURIComponent(error.message))
+    return redirect('/?error=Credenciais inválidas')
   }
 
-  revalidatePath('/', 'layout')
-  redirect('/')
+  return redirect('/')
 }
 
 export async function signup(formData: FormData) {
   const supabase = createClient()
+  const origin = headers().get('origin')
+  const email = formData.get('email') as string
+  const password = formData.get('password') as string
+  const name = formData.get('name') as string
 
-  const data = {
-    email: formData.get('email') as string,
-    password: formData.get('password') as string,
-  }
-  
+  // ESTA É A PARTE CORRIGIDA
   const options = {
+    emailRedirectTo: `${origin}/auth/callback`,
     {
-        name: formData.get('name') as string
+      name: name,
     }
   }
 
-  const { error } = await supabase.auth.signUp({ ...data, options })
+  const { error } = await supabase.auth.signUp({
+    email,
+    password,
+    options,
+  })
 
   if (error) {
-    return redirect('/?error=' + encodeURIComponent(error.message))
+    console.log(error)
+    return redirect('/?error=Não foi possível autenticar o usuário')
   }
 
-  revalidatePath('/', 'layout')
-  redirect('/')
+  return redirect('/?message=Verifique seu email para continuar')
 }
 
 export async function logout() {
-    const supabase = createClient()
-    await supabase.auth.signOut()
-    revalidatePath('/', 'layout')
-    redirect('/')
+  const supabase = createClient()
+  await supabase.auth.signOut()
+  return redirect('/')
 }

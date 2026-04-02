@@ -6,9 +6,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 export async function POST(req: Request) {
   const supabase = createClient();
-  
-  // LINHA CORRIGIDA AQUI
-  const {  user  } = await supabase.auth.getUser();
+  const { { user } } = await supabase.auth.getUser();
 
   if (!user) {
     return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
@@ -20,6 +18,7 @@ export async function POST(req: Request) {
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       line_items: [{
+        // ESTA É A PARTE CORRIGIDA
         price_{
           currency: "brl",
           product_{ name: `EngCalc Pro - Módulo ${moduleName}` },
