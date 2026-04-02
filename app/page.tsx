@@ -9,7 +9,7 @@ export default async function Page({ searchParams }: { searchParams: { error?: s
   const supabase = createClient();
 
   // LINHA CORRIGIDA AQUI
-  const { { user } } = await supabase.auth.getUser();
+  const {  user  } = await supabase.auth.getUser();
   
   let profile = null;
   if (user) {
