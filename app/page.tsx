@@ -3,63 +3,76 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Area, AreaChart, ReferenceLine } from "recharts";
 import * as THREE from "three";
 
-const STORAGE = {
-  async get(k){try{const r=await window.storage.get(k);return r?JSON.parse(r.value):null}catch{return null}},
-  async set(k,v){try{await window.storage.set(k,JSON.stringify(v));return true}catch{return false}},
-  async list(p){try{const r=await window.storage.list(p);return r?.keys||[]}catch{return []}},
-  async delete(k){try{await window.storage.delete(k);return true}catch{return false}},
-};
+// --- TIPOS GLOBAIS ---
+type AnyDict = {[key: string]: any};
 
+// --- ARMAZENAMENTO ---
+const STORAGE = {
+  async get(k: string){try{const r=await (window as any).storage.get(k);return r?JSON.parse(r.value):null}catch{return null}},
+  async set(k: string, v: any){try{await (window as any).storage.set(k,JSON.stringify(v));return true}catch{return false}},
+  async list(p: string){try{const r=await (window as any).storage.list(p);return r?.keys||[]}catch{return []}},
+  async delete(k: string){try{await (window as any).storage.delete(k);return true}catch{return false}},
+}
+
+// --- CONSTANTES DE ESTILO ---
 const C = {
   bg:"#060a10",s1:"#0d1117",s2:"#161b22",s3:"#1c2333",
   accent:"#58a6ff",accent2:"#79c0ff",accentDim:"rgba(88,166,255,0.08)",
   warn:"#d29922",danger:"#f85149",success:"#3fb950",
   text:"#c9d1d9",dim:"#8b949e",muted:"#484f58",border:"#21262d",
 };
-const sty = {
+
+const sty: AnyDict = {
   input:{width:"100%",padding:"7px 10px",background:C.s2,border:`1px solid ${C.border}`,borderRadius:"4px",color:C.text,fontSize:"12px",fontFamily:"inherit",outline:"none",boxSizing:"border-box"},
   label:{display:"block",fontSize:"9px",color:C.muted,marginBottom:"3px",letterSpacing:"0.8px",textTransform:"uppercase",fontWeight:500},
   card:{background:C.s1,border:`1px solid ${C.border}`,borderRadius:"8px",padding:"18px",marginBottom:"14px"},
   cardT:{fontSize:"11px",fontWeight:600,color:C.accent,marginBottom:"14px",letterSpacing:"1.5px",textTransform:"uppercase",paddingBottom:"8px",borderBottom:`1px solid ${C.border}`},
   btn:(v="p")=>({padding:"8px 18px",background:v==="p"?C.accent:v==="d"?C.danger:"transparent",border:v==="g"?`1px solid ${C.border}`:"none",borderRadius:"5px",color:v==="p"?C.bg:C.text,fontSize:"11px",fontWeight:600,cursor:"pointer",fontFamily:"inherit"}),
   sel:{width:"100%",padding:"7px 10px",background:C.s2,border:`1px solid ${C.border}`,borderRadius:"4px",color:C.text,fontSize:"12px",fontFamily:"inherit",outline:"none",boxSizing:"border-box"},
-  tab:(a)=>({padding:"6px 14px",background:a?C.accentDim:"transparent",border:a?`1px solid ${C.accent}33`:`1px solid transparent`,borderRadius:"5px",color:a?C.accent:C.dim,cursor:"pointer",fontSize:"10px",fontWeight:a?600:400,fontFamily:"inherit"}),
-  resBox:(t)=>({padding:"10px 14px",background:t==="s"?"rgba(63,185,80,0.06)":t==="d"?"rgba(248,81,73,0.06)":t==="w"?"rgba(210,153,34,0.06)":C.accentDim,border:`1px solid ${t==="s"?"#3fb95030":t==="d"?"#f8514930":t==="w"?"#d2992230":C.accent+"30"}`,borderRadius:"5px"}),
-  grid:(n)=>({display:"grid",gridTemplateColumns:`repeat(${n},1fr)`,gap:"10px"}),
+  tab:(a: boolean)=>({padding:"6px 14px",background:a?C.accentDim:"transparent",border:a?`1px solid ${C.accent}33`:`1px solid transparent`,borderRadius:"5px",color:a?C.accent:C.dim,cursor:"pointer",fontSize:"10px",fontWeight:a?600:400,fontFamily:"inherit"}),
+  resBox:(t: string)=>({padding:"10px 14px",background:t==="s"?"rgba(63,185,80,0.06)":t==="d"?"rgba(248,81,73,0.06)":t==="w"?"rgba(210,153,34,0.06)":C.accentDim,border:`1px solid ${t==="s"?"#3fb95030":t==="d"?"#f8514930":t==="w"?"#d2992230":C.accent+"30"}`,borderRadius:"5px"}),
+  grid:(n: number)=>({display:"grid",gridTemplateColumns:`repeat(${n},1fr)`,gap:"10px"}),
 };
 
-function Inp({label,value,onChange,unit,type="number"}){
+// --- COMPONENTES DE UI ---
+interface InpProps {label: string; value: string | number; onChange: (v: any) => void; unit?: string; type?: string;}
+function Inp({label,value,onChange,unit,type="number"}: InpProps){
   return(<div style={{marginBottom:"8px"}}><label style={sty.label}>{label}{unit&&<span style={{color:C.accent}}> ({unit})</span>}</label>
   <input type={type} step="any" style={sty.input} value={value} onChange={e=>onChange(type==="number"?parseFloat(e.target.value)||0:e.target.value)}/></div>);
 }
-function Sel({label,value,onChange,options}){
+
+interface SelProps {label: string; value: string; onChange: (v: string) => void; options: {v: string; l: string}[];}
+function Sel({label,value,onChange,options}: SelProps){
   return(<div style={{marginBottom:"8px"}}><label style={sty.label}>{label}</label>
   <select style={sty.sel} value={value} onChange={e=>onChange(e.target.value)}>{options.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select></div>);
 }
-function Res({label,value,unit,type="i"}){
+
+interface ResProps {label: string; value: string | number; unit?: string; type?: string;}
+function Res({label,value,unit,type="i"}: ResProps){
   const col=type==="s"?C.success:type==="d"?C.danger:type==="w"?C.warn:C.accent;
   return(<div style={sty.resBox(type)}><div style={{fontSize:"9px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.5px"}}>{label}</div>
   <div style={{fontSize:"16px",fontWeight:700,color:col,marginTop:"2px"}}>{typeof value==="number"?value.toFixed(2):value}<span style={{fontSize:"10px",fontWeight:400,color:C.dim,marginLeft:"4px"}}>{unit}</span></div></div>);
 }
-function Badge({ok,y="OK",n="FALHA"}){return <span style={{padding:"2px 8px",borderRadius:"10px",fontSize:"9px",fontWeight:600,background:ok?C.success+"18":C.danger+"18",color:ok?C.success:C.danger,border:`1px solid ${ok?C.success:C.danger}33`}}>{ok?y:n}</span>}
 
-// DATA
-const MATS={carvao:{n:"Carvão Mineral",d:900,aK:1.15,Km:0.52,au:1.12,um:0.49,aphi:1.16,phim:31},ferro:{n:"Minério de Ferro",d:2400,aK:1.10,Km:0.54,au:1.10,um:0.52,aphi:1.12,phim:35},calcario:{n:"Calcário",d:1500,aK:1.12,Km:0.50,au:1.08,um:0.45,aphi:1.14,phim:33},areia:{n:"Areia",d:1600,aK:1.10,Km:0.48,au:1.06,um:0.42,aphi:1.10,phim:30},cimento:{n:"Cimento",d:1500,aK:1.20,Km:0.54,au:1.15,um:0.46,aphi:1.18,phim:28},soja:{n:"Soja",d:770,aK:1.08,Km:0.50,au:1.05,um:0.38,aphi:1.08,phim:25},custom:{n:"Personalizado",d:0,aK:1,Km:0.5,au:1,um:0.45,aphi:1,phim:30}};
+interface BadgeProps {ok: boolean; y?: string; n?: string;}
+function Badge({ok,y="OK",n="FALHA"}: BadgeProps){return <span style={{padding:"2px 8px",borderRadius:"10px",fontSize:"9px",fontWeight:600,background:ok?C.success+"18":C.danger+"18",color:ok?C.success:C.danger,border:`1px solid ${ok?C.success:C.danger}33`}}>{ok?y:n}</span>}
+
+// --- DADOS E FUNÇÕES DE CÁLCULO ---
+const MATS: AnyDict={carvao:{n:"Carvão Mineral",d:900,aK:1.15,Km:0.52,au:1.12,um:0.49,aphi:1.16,phim:31},ferro:{n:"Minério de Ferro",d:2400,aK:1.10,Km:0.54,au:1.10,um:0.52,aphi:1.12,phim:35},calcario:{n:"Calcário",d:1500,aK:1.12,Km:0.50,au:1.08,um:0.45,aphi:1.14,phim:33},areia:{n:"Areia",d:1600,aK:1.10,Km:0.48,au:1.06,um:0.42,aphi:1.10,phim:30},cimento:{n:"Cimento",d:1500,aK:1.20,Km:0.54,au:1.15,um:0.46,aphi:1.18,phim:28},soja:{n:"Soja",d:770,aK:1.08,Km:0.50,au:1.05,um:0.38,aphi:1.08,phim:25},custom:{n:"Personalizado",d:0,aK:1,Km:0.5,au:1,um:0.45,aphi:1,phim:30}};
 const KY_T=[{l:15,k:.040},{l:30,k:.035},{l:60,k:.033},{l:120,k:.032},{l:240,k:.031},{l:300,k:.030},{l:420,k:.028},{l:600,k:.025},{l:730,k:.024},{l:900,k:.022}];
-function interpKy(L){if(L<=KY_T[0].l)return KY_T[0].k;if(L>=KY_T[KY_T.length-1].l)return KY_T[KY_T.length-1].k;for(let i=0;i<KY_T.length-1;i++){if(L>=KY_T[i].l&&L<=KY_T[i+1].l){const r=(L-KY_T[i].l)/(KY_T[i+1].l-KY_T[i].l);return KY_T[i].k+r*(KY_T[i+1].k-KY_T[i].k);}}return .030;}
-const CEMA_CAP={18:62,24:115,30:186,36:272,42:374,48:492,54:627,60:778,72:1128,84:1548,96:2034};
-const IDLERS={B:{l:"CEMA B",x:0.88},C:{l:"CEMA C",x:1.00},D:{l:"CEMA D",x:1.09},E:{l:"CEMA E",x:1.18}};
+function interpKy(L: number){if(L<=KY_T[0].l)return KY_T[0].k;if(L>=KY_T[KY_T.length-1].l)return KY_T[KY_T.length-1].k;for(let i=0;i<KY_T.length-1;i++){if(L>=KY_T[i].l&&L<=KY_T[i+1].l){const r=(L-KY_T[i].l)/(KY_T[i+1].l-KY_T[i].l);return KY_T[i].k+r*(KY_T[i+1].k-KY_T[i].k);}}return .030;}
+const CEMA_CAP: AnyDict={18:62,24:115,30:186,36:272,42:374,48:492,54:627,60:778,72:1128,84:1548,96:2034};
+const IDLERS: AnyDict={B:{l:"CEMA B",x:0.88},C:{l:"CEMA C",x:1.00},D:{l:"CEMA D",x:1.09},E:{l:"CEMA E",x:1.18}};
 const BW=[18,24,30,36,42,48,54,60,72,84,96];
 
-// VALIDATED CALCULATIONS
-function calcSilo(inp){
+function calcSilo(inp: AnyDict){
   const g=9.81,{density,z,b,c,beta_deg,aK,Km,au,um,aphi,phim_deg,Cb=1.6,hh}=inp;
   const gamma=density*g,K=Km/aK,mu=um/au;
   const U=2*(b+c),A=b*c;
   const z0=A/(K*mu*U);
   const Yj=1-Math.exp(-z/z0);
-  const pho=gamma*z0*K;  // VALIDATED: γ·A/(μ·U) = 44397.26
-  const pvf=gamma*z0*Yj; // VALIDATED: = 66847.03
+  const pho=gamma*z0*K;
+  const pvf=gamma*z0*Yj;
   const S=(b===c)?2:(1+b/c);
   const pvft=pvf*Cb;
   const pne=pvft*K;
@@ -68,7 +81,7 @@ function calcSilo(inp){
   return{gamma,K,mu,U,A,z0,Yj,pho,pvf,pvft,pne,S,curve};
 }
 
-function calcMoto(inp){
+function calcMoto(inp: AnyDict){
   const{cap_m3h,larg_m,alt_m,peso_conj,rpm,torque_disp,n_mot,fv}=inp;
   const vel=cap_m3h/3600/(larg_m*alt_m),vel_cm=vel*100;
   const freq=rpm/60,omega=2*Math.PI*freq;
@@ -83,7 +96,7 @@ function calcMoto(inp){
   return{vel_cm,freq,amp,acel,mult_g,torque_total,torque_mot,ok,margem,curve};
 }
 
-function calcPist(inp){
+function calcPist(inp: AnyDict){
   const g=9.81,{p_bar,Aa_cm2,Ar_cm2,t_ab,peso_kg,mu_rod=0.02,larg_m,comp_m,pn_Nm2,n_pist=1}=inp;
   const Fa=p_bar*Aa_cm2/10,Fr=p_bar*Ar_cm2/10;
   const vel=comp_m/t_ab;
@@ -97,7 +110,7 @@ function calcPist(inp){
   return{Fa,Fr,vel,steps,f_max,f_disp,fs,ok:fs>=1.2};
 }
 
-function calcTC(inp){
+function calcTC(inp: AnyDict){
   const g=9.81,{mat_d,cap_th,vel_ms,comp_m,elev_m,larg_pol,esp_rol,d_tamb_mm,ang_abr,n_limp,Wb,cap_tens,idler_cl,freq_hz,n_polos,p_rol_carga,comp_guias,Cs,Ft_flex,ef_c=0.94,ef_r=0.94,ef_a=0.96,n_ac=1}=inp;
   const cap_vol=CEMA_CAP[larg_pol]||500;
   const V_req=cap_th/(mat_d/1000*cap_vol);
@@ -128,9 +141,10 @@ function calcTC(inp){
   return{Wm,Ky,Kx,lambda_d,Fg,F1,Fa,Ta,Ft,Te,Ne_hp,N_hp,N_cv,N_kw,N_per,ef_t,n_sinc,n_mot,n_tamb,red,Cw,T1,T2,T_sag,Tad,contrapeso,cap_vol,cap_real,cap_ok:cap_real>=cap_th,V,curve,tension_ok:T1<=Tad};
 }
 
-// 3D SCENE
-function Scene3D({type,data,inputs}){
-  const ref=useRef();
+// --- CENA 3D ---
+interface Scene3DProps {type: string; data: AnyDict | null; inputs: AnyDict;}
+function Scene3D({type,data,inputs}: Scene3DProps){
+  const ref=useRef<HTMLDivElement>(null);
   useEffect(()=>{
     if(!ref.current)return;
     const w=ref.current.clientWidth,h=340;
@@ -156,7 +170,7 @@ function Scene3D({type,data,inputs}){
       grp.children[2].position.y=fillH/2;
       grp.add(new THREE.Mesh(new THREE.CylinderGeometry(bR,bR,bH,16,4,true),new THREE.MeshBasicMaterial({color:0x58a6ff,wireframe:true,transparent:true,opacity:0.12})));
       grp.children[3].position.y=bH/2;
-      if(data?.curve){const mx=Math.max(...data.curve.map(c=>c.ph));data.curve.filter((_,i)=>i%3===0).forEach(pt=>{const y=bH-pt.depth/(inputs?.z||12)*bH;const len=(pt.ph/mx)*bR*0.7;
+      if(data?.curve){const mx=Math.max(...data.curve.map((c:AnyDict)=>c.ph));data.curve.filter((_:any,i:number)=>i%3===0).forEach((pt:AnyDict)=>{const y=bH-pt.depth/(inputs?.z||12)*bH;const len=(pt.ph/mx)*bR*0.7;
         const ar=new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.05,len,6),new THREE.MeshPhongMaterial({color:0xf85149,emissive:0xf85149,emissiveIntensity:0.3}));
         ar.rotation.z=Math.PI/2;ar.position.set(bR+len/2,y,0);grp.add(ar);
         const ar2=ar.clone();ar2.position.set(-bR-len/2,y,0);ar2.rotation.z=-Math.PI/2;grp.add(ar2);});}
@@ -190,27 +204,28 @@ function Scene3D({type,data,inputs}){
       grp.add(new THREE.Mesh(new THREE.BoxGeometry(tL*1.1,0.04,tW*1.1),new THREE.MeshPhongMaterial({color:0x161b22})));
       cam.position.set(2.5,2,2.5);
     } else if(type==="pistao"){
-      grp.add(new THREE.Mesh(new THREE.BoxGeometry(1.4,0.08,0.7),new THREE.MeshPhongMaterial({color:0x484f58})));grp.children[0].position.y=0.5;
+      grp.add(new THREE.Mesh(new THREE.BoxGeometry(1.4,0.08,0.7),new THREE.MeshPhongMaterial({color:0x484f58})));(grp.children[0] as THREE.Mesh).position.y=0.5;
       const cyl=new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.07,1,12),new THREE.MeshPhongMaterial({color:0xd29922}));cyl.rotation.z=Math.PI/2;cyl.position.set(-0.25,0.65,0);grp.add(cyl);
       const rod=new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.035,0.7,8),new THREE.MeshPhongMaterial({color:0xc9d1d9}));rod.rotation.z=Math.PI/2;rod.position.set(0.45,0.65,0);grp.add(rod);
       const wM=new THREE.MeshPhongMaterial({color:0x2d333b,transparent:true,opacity:0.5});
-      [-0.75,0.75].forEach(x=>{grp.add(new THREE.Mesh(new THREE.BoxGeometry(0.04,1.2,0.8),wM));grp.children[grp.children.length-1].position.set(x,0.7,0);});
-      grp.add(new THREE.Mesh(new THREE.BoxGeometry(1.4,0.7,0.7),new THREE.MeshPhongMaterial({color:0x3fb950,transparent:true,opacity:0.2})));grp.children[grp.children.length-1].position.y=1.05;
+      [-0.75,0.75].forEach(x=>{grp.add(new THREE.Mesh(new THREE.BoxGeometry(0.04,1.2,0.8),wM));(grp.children[grp.children.length-1] as THREE.Mesh).position.set(x,0.7,0);});
+      grp.add(new THREE.Mesh(new THREE.BoxGeometry(1.4,0.7,0.7),new THREE.MeshPhongMaterial({color:0x3fb950,transparent:true,opacity:0.2})));(grp.children[grp.children.length-1] as THREE.Mesh).position.y=1.05;
       for(let i=-0.5;i<=0.5;i+=0.2){const ar=new THREE.Mesh(new THREE.CylinderGeometry(0.01,0.035,0.25,6),new THREE.MeshPhongMaterial({color:0xf85149,emissive:0xf85149,emissiveIntensity:0.4}));ar.position.set(i,0.35,0);grp.add(ar);}
       cam.position.set(2.5,1.8,2.5);
     }
     scene.add(grp);cam.lookAt(0,0.7,0);
     let ang=0;const anim=()=>{const id=requestAnimationFrame(anim);ang+=0.004;grp.rotation.y=ang;
-      if(type==="motovibrador"&&grp.children[0]){grp.children[0].position.y=1+Math.sin(ang*20)*0.025;grp.children[0].position.x=Math.sin(ang*20)*0.015;}
+      if(type==="motovibrador"&&grp.children[0]){(grp.children[0] as THREE.Mesh).position.y=1+Math.sin(ang*20)*0.025;(grp.children[0] as THREE.Mesh).position.x=Math.sin(ang*20)*0.015;}
       ren.render(scene,cam);return id;};
     const id=anim();
     return()=>{cancelAnimationFrame(id);ren.dispose();};
-  },[type,JSON.stringify(data?.curve?.length),JSON.stringify(inputs)]);
+  },[type,data?.curve?.length,JSON.stringify(inputs)]);
   return <div ref={ref} style={{width:"100%",height:"340px",borderRadius:"6px",overflow:"hidden",border:`1px solid ${C.border}`}}/>;
 }
 
-// 2D DIAGRAMS
-function SiloDiag({inp,data}){
+// --- DIAGRAMAS 2D ---
+interface DiagProps {inp: AnyDict | null; data: AnyDict | null;}
+function SiloDiag({inp,data}: DiagProps){
   const w=500,h=380;const bH=inp?.z||12,bR=Math.min((inp?.b||8),(inp?.c||8));
   const sc=(h-80)/bH;const cx=w/2;const bL=cx-bR*12,bRx=cx+bR*12;const top=30,bot=top+bH*sc*0.7;
   return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",background:C.s2,borderRadius:"6px"}}>
@@ -218,7 +233,7 @@ function SiloDiag({inp,data}){
     <rect x={bL} y={top} width={bRx-bL} height={bot-top} fill="none" stroke={C.accent} strokeWidth="1.5" strokeDasharray="4,2"/>
     <polygon points={`${bL},${bot} ${bRx},${bot} ${cx+15},${bot+50} ${cx-15},${bot+50}`} fill="none" stroke={C.accent} strokeWidth="1.5" strokeDasharray="4,2"/>
     <rect x={bL+2} y={top+15} width={bRx-bL-4} height={bot-top-15} fill="#3fb950" fillOpacity="0.1"/>
-    {data?.curve?.filter((_,i)=>i%2===0).map((pt,i)=>{const y=top+(pt.depth/bH)*(bot-top);const mx=Math.max(...data.curve.map(c=>c.ph));const len=Math.max(3,(pt.ph/mx)*55);
+    {data?.curve?.filter((_:any,i:number)=>i%2===0).map((pt:AnyDict,i:number)=>{const y=top+(pt.depth/bH)*(bot-top);const mx=Math.max(...data.curve.map((c:AnyDict)=>c.ph));const len=Math.max(3,(pt.ph/mx)*55);
       return <g key={i}><line x1={bRx+2} y1={y} x2={bRx+2+len} y2={y} stroke="#f85149" strokeWidth="1.2" markerEnd="url(#aR)"/>
       <text x={bRx+len+6} y={y+3} fill={C.dim} fontSize="7">{(pt.ph/1000).toFixed(1)}</text></g>;})}
     <text x={bL-8} y={(top+bot)/2} fill={C.dim} fontSize="9" textAnchor="end" transform={`rotate(-90,${bL-8},${(top+bot)/2})`}>z = {bH}m</text>
@@ -227,7 +242,7 @@ function SiloDiag({inp,data}){
   </svg>);
 }
 
-function TCDiag({inp,data}){
+function TCDiag({inp,data}: DiagProps){
   const w=580,h=250,mx=40;const L=inp?.comp_m||20,H=inp?.elev_m||0;
   const baseY=h-50;const topY=baseY-(H/Math.max(L,1))*(w-2*mx)*0.8;
   return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",background:C.s2,borderRadius:"6px"}}>
@@ -238,7 +253,7 @@ function TCDiag({inp,data}){
     <circle cx={w-mx} cy={Math.max(40,topY)+6} r="10" fill="none" stroke={C.warn} strokeWidth="2"/>
     <circle cx={mx} cy={baseY+6} r="8" fill="none" stroke={C.dim} strokeWidth="1.5"/>
     <polygon points={`${mx+12},${baseY-3} ${w-mx-25},${Math.max(37,topY-3)} ${w-mx-25},${Math.max(34,topY-6)} ${mx+12},${baseY-6}`} fill="#3fb950" opacity="0.12" stroke="#3fb950" strokeWidth="0.5"/>
-    {data?.curve&&<g>{data.curve.map((pt,i)=>{if(!i)return null;const p=data.curve[i-1];const mx2=Math.max(...data.curve.map(c=>c.T_ida));
+    {data?.curve&&<g>{data.curve.map((pt:AnyDict,i:number)=>{if(!i)return null;const p=data.curve[i-1];const mx2=Math.max(...data.curve.map((c:AnyDict)=>c.T_ida));
       return <line key={i} x1={mx+(p.pos/L)*(w-2*mx)} y1={20+(1-p.T_ida/mx2)*25} x2={mx+(pt.pos/L)*(w-2*mx)} y2={20+(1-pt.T_ida/mx2)*25} stroke="#f85149" strokeWidth="1.2" opacity="0.6"/>;})}</g>}
     <text x={w/2} y={h-8} fill={C.accent} fontSize="9" textAnchor="middle" fontWeight="500">Vista Lateral — L = {L}m{H>0?` · H = ${H}m`:""}</text>
     <text x={w-mx+2} y={Math.max(40,topY)-6} fill={C.warn} fontSize="7">ACION.</text>
@@ -246,7 +261,7 @@ function TCDiag({inp,data}){
   </svg>);
 }
 
-function PistDiag({inp,data}){
+function PistDiag({inp,data}: DiagProps){
   const w=480,h=260;
   return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",background:C.s2,borderRadius:"6px"}}>
     <defs><marker id="ad" markerWidth="5" markerHeight="4" refX="3" refY="2" orient="auto"><path d="M0,0 L5,2 L0,4" fill="#f85149"/></marker>
@@ -262,13 +277,13 @@ function PistDiag({inp,data}){
     <line x1={35} y1={135} x2={118} y2={135} stroke={C.success} strokeWidth="2" markerEnd="url(#ag)"/>
     <text x={76} y={123} fill={C.success} fontSize="7" textAnchor="middle">Fa={data?.Fa?.toFixed(1)||"?"} kN</text>
     {data?.steps&&<g><text x={240} y={175} fill={C.accent} fontSize="8" textAnchor="middle" fontWeight="600">Força × Tempo</text>
-    {data.steps.filter((_,i)=>i%2===0).map((s,i)=>{const mx=data.steps[0].forca_mat||1;const bh=Math.max(2,(s.forca_mat/mx)*50);
+    {data.steps.filter((_:any,i:number)=>i%2===0).map((s:AnyDict,i:number)=>{const mx=data.steps[0].forca_mat||1;const bh=Math.max(2,(s.forca_mat/mx)*50);
       return <g key={i}><rect x={80+i*60} y={230-bh} width={40} height={bh} fill={C.accent} fillOpacity="0.2" stroke={C.accent} strokeWidth="0.5" rx="2"/>
       <text x={100+i*60} y={240} fill={C.dim} fontSize="7" textAnchor="middle">{s.t}s</text></g>;})}</g>}
   </svg>);
 }
 
-function MotoDiag({inp,data}){
+function MotoDiag({inp,data}: DiagProps){
   const w=480,h=230;
   return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",background:C.s2,borderRadius:"6px"}}>
     <g transform="rotate(-8,240,90)">
@@ -289,7 +304,7 @@ function MotoDiag({inp,data}){
   </svg>);
 }
 
-// VALIDATION PANEL
+// --- PAINEL DE VALIDAÇÃO ---
 function ValPanel(){
   const checks=[
     {m:"Silo",p:"K = Km/aK",e:"0.4522",g:"0.4522",ok:true},
@@ -323,29 +338,30 @@ function ValPanel(){
   </div>);
 }
 
-// MODULE WRAPPER WITH TABS
-function Tabs({tab,setTab}){
+// --- MÓDULOS DA APLICAÇÃO ---
+interface TabsProps {tab: number; setTab: (t: number) => void;}
+function Tabs({tab,setTab}: TabsProps){
   return(<div style={{display:"flex",gap:"5px",marginBottom:"14px",flexWrap:"wrap"}}>
     {["Cálculo","Diagrama 2D","Gráficos","Modelo 3D"].map((t,i)=><button key={i} onClick={()=>setTab(i)} style={sty.tab(tab===i)}>{t}</button>)}
   </div>);
 }
 
-// SILO MODULE
-function SiloMod({onSave}){
+interface ModProps {onSave: (d: AnyDict) => void;}
+function SiloMod({onSave}: ModProps){
   const[mat,setMat]=useState("carvao");
   const[inp,setI]=useState({density:900,z:12.7,b:8.8,c:8.8,beta_deg:22.5,aK:1.15,Km:0.52,au:1.12,um:0.49,aphi:1.16,phim_deg:31,Cb:1.6,hh:9.3});
-  const[res,setR]=useState(null);const[tab,setTab]=useState(0);
-  const s=(k,v)=>setI(p=>({...p,[k]:v}));
-  const updMat=(k)=>{setMat(k);if(k!=="custom"){const m=MATS[k];setI(p=>({...p,density:m.d,aK:m.aK,Km:m.Km,au:m.au,um:m.um,aphi:m.aphi,phim_deg:m.phim}))}};
+  const[res,setR]=useState<AnyDict | null>(null);const[tab,setTab]=useState(0);
+  const s=(k: string,v: any)=>setI(p=>({...p,[k]:v}));
+  const updMat=(k: string)=>{setMat(k);if(k!=="custom"){const m=MATS[k];setI(p=>({...p,density:m.d,aK:m.aK,Km:m.Km,au:m.au,um:m.um,aphi:m.aphi,phim_deg:m.phim}))}};
   return(<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
       <div><h2 style={{margin:0,fontSize:"14px",fontWeight:700}}>Pressão em Silos</h2><div style={{fontSize:"9px",color:C.muted,marginTop:"2px"}}>EN 1991-4 — Validado ✓</div></div>
       <div style={{display:"flex",gap:"6px"}}><button onClick={()=>onSave({type:"silo",inp,res})} style={sty.btn("g")}>Salvar</button><button onClick={()=>setR(calcSilo(inp))} style={sty.btn("p")}>CALCULAR</button></div>
     </div>
     <Tabs tab={tab} setTab={setTab}/>
-    {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Material</div><Sel label="Material" value={mat} onChange={updMat} options={Object.entries(MATS).map(([k,v])=>({v:k,l:v.n}))}/><div style={sty.grid(3)}><Inp label="Densidade" value={inp.density} onChange={v=>s("density",v)} unit="kg/m³"/><Inp label="z" value={inp.z} onChange={v=>s("z",v)} unit="m"/><Inp label="Cb" value={inp.Cb} onChange={v=>s("Cb",v)}/></div></div>
-    <div style={sty.card}><div style={sty.cardT}>Geometria</div><div style={sty.grid(4)}><Inp label="b" value={inp.b} onChange={v=>s("b",v)} unit="m"/><Inp label="c" value={inp.c} onChange={v=>s("c",v)} unit="m"/><Inp label="β" value={inp.beta_deg} onChange={v=>s("beta_deg",v)} unit="°"/><Inp label="hh" value={inp.hh} onChange={v=>s("hh",v)} unit="m"/></div></div>
-    <div style={sty.card}><div style={sty.cardT}>Coeficientes Eurocode</div><div style={sty.grid(3)}><Inp label="aK" value={inp.aK} onChange={v=>s("aK",v)}/><Inp label="Km" value={inp.Km} onChange={v=>s("Km",v)}/><Inp label="aμ" value={inp.au} onChange={v=>s("au",v)}/><Inp label="μm" value={inp.um} onChange={v=>s("um",v)}/><Inp label="aφ" value={inp.aphi} onChange={v=>s("aphi",v)}/><Inp label="φim" value={inp.phim_deg} onChange={v=>s("phim_deg",v)} unit="°"/></div></div>
+    {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Material</div><Sel label="Material" value={mat} onChange={updMat} options={Object.entries(MATS).map(([k,v])=>({v:k,l:v.n}))}/><div style={sty.grid(3)}><Inp label="Densidade" value={inp.density} onChange={(v:any)=>s("density",v)} unit="kg/m³"/><Inp label="z" value={inp.z} onChange={(v:any)=>s("z",v)} unit="m"/><Inp label="Cb" value={inp.Cb} onChange={(v:any)=>s("Cb",v)}/></div></div>
+    <div style={sty.card}><div style={sty.cardT}>Geometria</div><div style={sty.grid(4)}><Inp label="b" value={inp.b} onChange={(v:any)=>s("b",v)} unit="m"/><Inp label="c" value={inp.c} onChange={(v:any)=>s("c",v)} unit="m"/><Inp label="β" value={inp.beta_deg} onChange={(v:any)=>s("beta_deg",v)} unit="°"/><Inp label="hh" value={inp.hh} onChange={(v:any)=>s("hh",v)} unit="m"/></div></div>
+    <div style={sty.card}><div style={sty.cardT}>Coeficientes Eurocode</div><div style={sty.grid(3)}><Inp label="aK" value={inp.aK} onChange={(v:any)=>s("aK",v)}/><Inp label="Km" value={inp.Km} onChange={(v:any)=>s("Km",v)}/><Inp label="aμ" value={inp.au} onChange={(v:any)=>s("au",v)}/><Inp label="μm" value={inp.um} onChange={(v:any)=>s("um",v)}/><Inp label="aφ" value={inp.aphi} onChange={(v:any)=>s("aphi",v)}/><Inp label="φim" value={inp.phim_deg} onChange={(v:any)=>s("phim_deg",v)} unit="°"/></div></div>
     {res&&<><div style={sty.card}><div style={sty.cardT}>Parâmetros</div><div style={sty.grid(3)}><Res label="K" value={res.K}/><Res label="μ" value={res.mu}/><Res label="z₀" value={res.z0} unit="m"/><Res label="Yj" value={res.Yj}/><Res label="U" value={res.U} unit="m"/><Res label="A" value={res.A} unit="m²"/></div></div>
     <div style={sty.card}><div style={sty.cardT}>Pressões</div><div style={sty.grid(2)}><Res label="ph₀ Horizontal" value={res.pho} unit="N/m²"/><Res label="pvf Vertical" value={res.pvf} unit="N/m²"/><Res label="pvft ×Cb" value={res.pvft} unit="N/m²" type="w"/><Res label="pne Descarga" value={res.pne} unit="N/m²" type="s"/></div></div></>}</>}
     {tab===1&&<div style={sty.card}><div style={sty.cardT}>Seção Transversal</div>{!res?<p style={{color:C.dim,textAlign:"center"}}>Execute o cálculo</p>:<SiloDiag inp={inp} data={res}/>}</div>}
@@ -360,18 +376,17 @@ function SiloMod({onSave}){
   </div>);
 }
 
-// MOTO MODULE
-function MotoMod({onSave}){
+function MotoMod({onSave}: ModProps){
   const[inp,setI]=useState({cap_m3h:395,larg_m:1.99,comp_m:1.14,alt_m:0.16,ang_deg:30,peso_calha:315.8,peso_conj:660.3,rpm:1150,torque_disp:260,n_mot:2,fv:2.7});
-  const[res,setR]=useState(null);const[tab,setTab]=useState(0);const s=(k,v)=>setI(p=>({...p,[k]:v}));
+  const[res,setR]=useState<AnyDict | null>(null);const[tab,setTab]=useState(0);const s=(k:string,v:any)=>setI(p=>({...p,[k]:v}));
   return(<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
       <div><h2 style={{margin:0,fontSize:"14px",fontWeight:700}}>Motovibrador</h2><div style={{fontSize:"9px",color:C.muted,marginTop:"2px"}}>Calhas vibratórias — Validado ✓</div></div>
       <div style={{display:"flex",gap:"6px"}}><button onClick={()=>onSave({type:"moto",inp,res})} style={sty.btn("g")}>Salvar</button><button onClick={()=>setR(calcMoto(inp))} style={sty.btn("p")}>CALCULAR</button></div>
     </div>
     <Tabs tab={tab} setTab={setTab}/>
-    {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Calha</div><div style={sty.grid(3)}><Inp label="Capacidade" value={inp.cap_m3h} onChange={v=>s("cap_m3h",v)} unit="m³/h"/><Inp label="Largura" value={inp.larg_m} onChange={v=>s("larg_m",v)} unit="m"/><Inp label="Comprimento" value={inp.comp_m} onChange={v=>s("comp_m",v)} unit="m"/><Inp label="Altura" value={inp.alt_m} onChange={v=>s("alt_m",v)} unit="m"/><Inp label="Ângulo" value={inp.ang_deg} onChange={v=>s("ang_deg",v)} unit="°"/><Inp label="Fator vel." value={inp.fv} onChange={v=>s("fv",v)}/></div></div>
-    <div style={sty.card}><div style={sty.cardT}>Acionamento</div><div style={sty.grid(3)}><Inp label="Peso calha" value={inp.peso_calha} onChange={v=>s("peso_calha",v)} unit="kgf"/><Inp label="Peso conjunto" value={inp.peso_conj} onChange={v=>s("peso_conj",v)} unit="kgf"/><Inp label="Nº motores" value={inp.n_mot} onChange={v=>s("n_mot",v)}/><Inp label="RPM" value={inp.rpm} onChange={v=>s("rpm",v)} unit="rpm"/><Inp label="Torque disp." value={inp.torque_disp} onChange={v=>s("torque_disp",v)} unit="kgf.cm"/></div></div>
+    {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Calha</div><div style={sty.grid(3)}><Inp label="Capacidade" value={inp.cap_m3h} onChange={(v:any)=>s("cap_m3h",v)} unit="m³/h"/><Inp label="Largura" value={inp.larg_m} onChange={(v:any)=>s("larg_m",v)} unit="m"/><Inp label="Comprimento" value={inp.comp_m} onChange={(v:any)=>s("comp_m",v)} unit="m"/><Inp label="Altura" value={inp.alt_m} onChange={(v:any)=>s("alt_m",v)} unit="m"/><Inp label="Ângulo" value={inp.ang_deg} onChange={(v:any)=>s("ang_deg",v)} unit="°"/><Inp label="Fator vel." value={inp.fv} onChange={(v:any)=>s("fv",v)}/></div></div>
+    <div style={sty.card}><div style={sty.cardT}>Acionamento</div><div style={sty.grid(3)}><Inp label="Peso calha" value={inp.peso_calha} onChange={(v:any)=>s("peso_calha",v)} unit="kgf"/><Inp label="Peso conjunto" value={inp.peso_conj} onChange={(v:any)=>s("peso_conj",v)} unit="kgf"/><Inp label="Nº motores" value={inp.n_mot} onChange={(v:any)=>s("n_mot",v)}/><Inp label="RPM" value={inp.rpm} onChange={(v:any)=>s("rpm",v)} unit="rpm"/><Inp label="Torque disp." value={inp.torque_disp} onChange={(v:any)=>s("torque_disp",v)} unit="kgf.cm"/></div></div>
     {res&&<div style={sty.card}><div style={sty.cardT}>Resultados <Badge ok={res.ok} y="APROVADO" n="REPROVADO"/></div><div style={sty.grid(3)}><Res label="Vel. projeto" value={res.vel_cm} unit="cm/s"/><Res label="Frequência" value={res.freq} unit="Hz"/><Res label="Amplitude" value={res.amp} unit="cm"/><Res label="Aceleração" value={res.acel} unit="cm/s²"/><Res label="Mult. g" value={res.mult_g} unit="g"/><Res label="Torque total" value={res.torque_total} unit="kgf.cm" type="w"/><Res label="Torque/motor" value={res.torque_mot} unit="kgf.cm" type={res.ok?"s":"d"}/><Res label="Torque disp." value={inp.torque_disp} unit="kgf.cm" type="s"/><Res label="Margem" value={res.margem} unit="%" type={res.margem>20?"s":"w"}/></div></div>}</>}
     {tab===1&&<div style={sty.card}><div style={sty.cardT}>Diagrama 2D</div>{!res?<p style={{color:C.dim,textAlign:"center"}}>Execute o cálculo</p>:<MotoDiag inp={inp} data={res}/>}</div>}
     {tab===2&&<div style={sty.card}><div style={sty.cardT}>Amplitude e Aceleração vs Frequência</div>{!res?<p style={{color:C.dim,textAlign:"center"}}>Execute o cálculo</p>:
@@ -388,21 +403,20 @@ function MotoMod({onSave}){
   </div>);
 }
 
-// PISTAO MODULE
-function PistMod({onSave}){
+function PistMod({onSave}: ModProps){
   const[inp,setI]=useState({p_bar:140,Aa_cm2:50.26,Ar_cm2:25.63,curso_mm:1600,t_ab:2.9,peso_kg:1097,n_rodas:8,mu_rod:0.02,larg_m:1.6,comp_m:1.1,pn_Nm2:170000,n_pist:1});
-  const[res,setR]=useState(null);const[tab,setTab]=useState(0);const s=(k,v)=>setI(p=>({...p,[k]:v}));
+  const[res,setR]=useState<AnyDict | null>(null);const[tab,setTab]=useState(0);const s=(k:string,v:any)=>setI(p=>({...p,[k]:v}));
   return(<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
       <div><h2 style={{margin:0,fontSize:"14px",fontWeight:700}}>Pistão de Abertura</h2><div style={{fontSize:"9px",color:C.muted,marginTop:"2px"}}>Cilindros hidráulicos — Validado ✓</div></div>
       <div style={{display:"flex",gap:"6px"}}><button onClick={()=>onSave({type:"pistao",inp,res})} style={sty.btn("g")}>Salvar</button><button onClick={()=>setR(calcPist(inp))} style={sty.btn("p")}>CALCULAR</button></div>
     </div>
     <Tabs tab={tab} setTab={setTab}/>
-    {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Cilindro</div><div style={sty.grid(3)}><Inp label="Pressão UH" value={inp.p_bar} onChange={v=>s("p_bar",v)} unit="bar"/><Inp label="Área atuação" value={inp.Aa_cm2} onChange={v=>s("Aa_cm2",v)} unit="cm²"/><Inp label="Área retorno" value={inp.Ar_cm2} onChange={v=>s("Ar_cm2",v)} unit="cm²"/><Inp label="Curso" value={inp.curso_mm} onChange={v=>s("curso_mm",v)} unit="mm"/><Inp label="Tempo abert." value={inp.t_ab} onChange={v=>s("t_ab",v)} unit="s"/><Inp label="Nº pistões" value={inp.n_pist} onChange={v=>s("n_pist",v)}/></div></div>
-    <div style={sty.card}><div style={sty.cardT}>Comporta</div><div style={sty.grid(3)}><Inp label="Peso" value={inp.peso_kg} onChange={v=>s("peso_kg",v)} unit="kg"/><Inp label="Nº rodas" value={inp.n_rodas} onChange={v=>s("n_rodas",v)}/><Inp label="μ rodas" value={inp.mu_rod} onChange={v=>s("mu_rod",v)}/><Inp label="Larg. saída" value={inp.larg_m} onChange={v=>s("larg_m",v)} unit="m"/><Inp label="Comp. saída" value={inp.comp_m} onChange={v=>s("comp_m",v)} unit="m"/><Inp label="P. material" value={inp.pn_Nm2} onChange={v=>s("pn_Nm2",v)} unit="N/m²"/></div></div>
+    {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Cilindro</div><div style={sty.grid(3)}><Inp label="Pressão UH" value={inp.p_bar} onChange={(v:any)=>s("p_bar",v)} unit="bar"/><Inp label="Área atuação" value={inp.Aa_cm2} onChange={(v:any)=>s("Aa_cm2",v)} unit="cm²"/><Inp label="Área retorno" value={inp.Ar_cm2} onChange={(v:any)=>s("Ar_cm2",v)} unit="cm²"/><Inp label="Curso" value={inp.curso_mm} onChange={(v:any)=>s("curso_mm",v)} unit="mm"/><Inp label="Tempo abert." value={inp.t_ab} onChange={(v:any)=>s("t_ab",v)} unit="s"/><Inp label="Nº pistões" value={inp.n_pist} onChange={(v:any)=>s("n_pist",v)}/></div></div>
+    <div style={sty.card}><div style={sty.cardT}>Comporta</div><div style={sty.grid(3)}><Inp label="Peso" value={inp.peso_kg} onChange={(v:any)=>s("peso_kg",v)} unit="kg"/><Inp label="Nº rodas" value={inp.n_rodas} onChange={(v:any)=>s("n_rodas",v)}/><Inp label="μ rodas" value={inp.mu_rod} onChange={(v:any)=>s("mu_rod",v)}/><Inp label="Larg. saída" value={inp.larg_m} onChange={(v:any)=>s("larg_m",v)} unit="m"/><Inp label="Comp. saída" value={inp.comp_m} onChange={(v:any)=>s("comp_m",v)} unit="m"/><Inp label="P. material" value={inp.pn_Nm2} onChange={(v:any)=>s("pn_Nm2",v)} unit="N/m²"/></div></div>
     {res&&<><div style={sty.card}><div style={sty.cardT}>Forças <Badge ok={res.ok} y="FS≥1.2" n="FS<1.2"/></div>
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:"10px"}}><thead><tr>{["t(s)","Abert.(m)","Área(m²)","F mat(N)","F tot(N)"].map((h,i)=><th key={i} style={{padding:"5px 6px",textAlign:"left",borderBottom:`1px solid ${C.accent}33`,color:C.accent,fontSize:"8px",textTransform:"uppercase"}}>{h}</th>)}</tr></thead>
-      <tbody>{res.steps.filter((_,i)=>i%2===0).map((s,i)=><tr key={i}><td style={{padding:"4px 6px",borderBottom:`1px solid ${C.border}`}}>{s.t}</td><td style={{padding:"4px 6px",borderBottom:`1px solid ${C.border}`}}>{s.comp_ab}</td><td style={{padding:"4px 6px",borderBottom:`1px solid ${C.border}`}}>{s.area_cob}</td><td style={{padding:"4px 6px",borderBottom:`1px solid ${C.border}`,color:C.warn}}>{s.forca_mat.toLocaleString()}</td><td style={{padding:"4px 6px",borderBottom:`1px solid ${C.border}`,color:C.warn}}>{s.forca_total.toLocaleString()}</td></tr>)}</tbody></table></div>
+      <tbody>{res.steps.filter((_:any,i:number)=>i%2===0).map((s:AnyDict,i:number)=><tr key={i}><td style={{padding:"4px 6px",borderBottom:`1px solid ${C.border}`}}>{s.t}</td><td style={{padding:"4px 6px",borderBottom:`1px solid ${C.border}`}}>{s.comp_ab}</td><td style={{padding:"4px 6px",borderBottom:`1px solid ${C.border}`}}>{s.area_cob}</td><td style={{padding:"4px 6px",borderBottom:`1px solid ${C.border}`,color:C.warn}}>{s.forca_mat.toLocaleString()}</td><td style={{padding:"4px 6px",borderBottom:`1px solid ${C.border}`,color:C.warn}}>{s.forca_total.toLocaleString()}</td></tr>)}</tbody></table></div>
     <div style={sty.card}><div style={sty.cardT}>Verificação</div><div style={sty.grid(3)}><Res label="Fa" value={res.Fa} unit="kN"/><Res label="Fr" value={res.Fr} unit="kN"/><Res label="Vel." value={res.vel} unit="m/s"/><Res label="F máx" value={res.f_max/1000} unit="kN" type="w"/><Res label="F disp" value={res.f_disp/1000} unit="kN" type="s"/><Res label="FS" value={res.fs} type={res.fs>=1.5?"s":res.fs>=1.2?"w":"d"}/></div></div></>}</>}
     {tab===1&&<div style={sty.card}><div style={sty.cardT}>Diagrama 2D</div>{!res?<p style={{color:C.dim,textAlign:"center"}}>Execute o cálculo</p>:<PistDiag inp={inp} data={res}/>}</div>}
     {tab===2&&<div style={sty.card}><div style={sty.cardT}>Força vs Tempo</div>{!res?<p style={{color:C.dim,textAlign:"center"}}>Execute o cálculo</p>:
@@ -418,20 +432,19 @@ function PistMod({onSave}){
   </div>);
 }
 
-// TC MODULE
-function TCMod({onSave}){
+function TCMod({onSave}: ModProps){
   const[inp,setI]=useState({mat_d:900,cap_th:3240,vel_ms:2.5,comp_m:19.6,elev_m:0,larg_pol:72,ang_rol:20,esp_rol:0.5,d_tamb_mm:630,ang_abr:180,n_limp:2,Wb:59.56,n_lonas:4,cap_tens:86298.5,idler_cl:"D",freq_hz:60,n_polos:4,p_rol_carga:40.01,p_rol_ret:26.8,comp_guias:16,Cs:0.0754,Ft_flex:40.8,ef_c:0.94,ef_r:0.94,ef_a:0.96,n_ac:2});
-  const[res,setR]=useState(null);const[tab,setTab]=useState(0);const s=(k,v)=>setI(p=>({...p,[k]:v}));
+  const[res,setR]=useState<AnyDict | null>(null);const[tab,setTab]=useState(0);const s=(k:string,v:any)=>setI(p=>({...p,[k]:v}));
   return(<div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
       <div><h2 style={{margin:0,fontSize:"14px",fontWeight:700}}>Transportador de Correia</h2><div style={{fontSize:"9px",color:C.muted,marginTop:"2px"}}>CEMA 7th Ed. — Validado ✓</div></div>
       <div style={{display:"flex",gap:"6px"}}><button onClick={()=>onSave({type:"tc",inp,res})} style={sty.btn("g")}>Salvar</button><button onClick={()=>setR(calcTC(inp))} style={sty.btn("p")}>CALCULAR</button></div>
     </div>
     <Tabs tab={tab} setTab={setTab}/>
-    {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Material e Capacidade</div><div style={sty.grid(4)}><Inp label="Densidade" value={inp.mat_d} onChange={v=>s("mat_d",v)} unit="kg/m³"/><Inp label="Capacidade" value={inp.cap_th} onChange={v=>s("cap_th",v)} unit="t/h"/><Inp label="Velocidade" value={inp.vel_ms} onChange={v=>s("vel_ms",v)} unit="m/s"/><Inp label="Nº acion." value={inp.n_ac} onChange={v=>s("n_ac",v)}/></div></div>
-    <div style={sty.card}><div style={sty.cardT}>Geometria</div><div style={sty.grid(4)}><Inp label="Comprimento" value={inp.comp_m} onChange={v=>s("comp_m",v)} unit="m"/><Inp label="Elevação" value={inp.elev_m} onChange={v=>s("elev_m",v)} unit="m"/><Sel label="Larg. correia" value={inp.larg_pol} onChange={v=>s("larg_pol",parseInt(v))} options={BW.map(w=>({v:w,l:`${w}" (${(w*25.4).toFixed(0)}mm)`}))}/><Inp label="Ângulo rolos" value={inp.ang_rol} onChange={v=>s("ang_rol",v)} unit="°"/><Inp label="Espaçamento" value={inp.esp_rol} onChange={v=>s("esp_rol",v)} unit="m"/><Inp label="Comp. guias" value={inp.comp_guias} onChange={v=>s("comp_guias",v)} unit="m"/><Inp label="Ø tambor" value={inp.d_tamb_mm} onChange={v=>s("d_tamb_mm",v)} unit="mm"/><Inp label="Ângulo abraç." value={inp.ang_abr} onChange={v=>s("ang_abr",v)} unit="°"/></div></div>
-    <div style={sty.card}><div style={sty.cardT}>Correia e Roletes</div><div style={sty.grid(4)}><Inp label="Wb" value={inp.Wb} onChange={v=>s("Wb",v)} unit="kgf/m"/><Inp label="Lonas" value={inp.n_lonas} onChange={v=>s("n_lonas",v)}/><Inp label="Cap. tensão" value={inp.cap_tens} onChange={v=>s("cap_tens",v)} unit="N/m"/><Sel label="Classe" value={inp.idler_cl} onChange={v=>s("idler_cl",v)} options={Object.entries(IDLERS).map(([k,v])=>({v:k,l:v.l}))}/><Inp label="P. rol. carga" value={inp.p_rol_carga} onChange={v=>s("p_rol_carga",v)} unit="kgf"/><Inp label="Limp." value={inp.n_limp} onChange={v=>s("n_limp",v)}/><Inp label="Cs" value={inp.Cs} onChange={v=>s("Cs",v)}/><Inp label="Ft" value={inp.Ft_flex} onChange={v=>s("Ft_flex",v)} unit="kgf"/></div></div>
-    <div style={sty.card}><div style={sty.cardT}>Motor</div><div style={sty.grid(4)}><Inp label="Freq." value={inp.freq_hz} onChange={v=>s("freq_hz",v)} unit="Hz"/><Inp label="Polos" value={inp.n_polos} onChange={v=>s("n_polos",v)}/><Inp label="η corr." value={inp.ef_c} onChange={v=>s("ef_c",v)}/><Inp label="η red." value={inp.ef_r} onChange={v=>s("ef_r",v)}/></div></div>
+    {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Material e Capacidade</div><div style={sty.grid(4)}><Inp label="Densidade" value={inp.mat_d} onChange={(v:any)=>s("mat_d",v)} unit="kg/m³"/><Inp label="Capacidade" value={inp.cap_th} onChange={(v:any)=>s("cap_th",v)} unit="t/h"/><Inp label="Velocidade" value={inp.vel_ms} onChange={(v:any)=>s("vel_ms",v)} unit="m/s"/><Inp label="Nº acion." value={inp.n_ac} onChange={(v:any)=>s("n_ac",v)}/></div></div>
+    <div style={sty.card}><div style={sty.cardT}>Geometria</div><div style={sty.grid(4)}><Inp label="Comprimento" value={inp.comp_m} onChange={(v:any)=>s("comp_m",v)} unit="m"/><Inp label="Elevação" value={inp.elev_m} onChange={(v:any)=>s("elev_m",v)} unit="m"/><Sel label="Larg. correia" value={String(inp.larg_pol)} onChange={(v:any)=>s("larg_pol",parseInt(v))} options={BW.map(w=>({v:String(w),l:`${w}" (${(w*25.4).toFixed(0)}mm)`}))}/><Inp label="Ângulo rolos" value={inp.ang_rol} onChange={(v:any)=>s("ang_rol",v)} unit="°"/><Inp label="Espaçamento" value={inp.esp_rol} onChange={(v:any)=>s("esp_rol",v)} unit="m"/><Inp label="Comp. guias" value={inp.comp_guias} onChange={(v:any)=>s("comp_guias",v)} unit="m"/><Inp label="Ø tambor" value={inp.d_tamb_mm} onChange={(v:any)=>s("d_tamb_mm",v)} unit="mm"/><Inp label="Ângulo abraç." value={inp.ang_abr} onChange={(v:any)=>s("ang_abr",v)} unit="°"/></div></div>
+    <div style={sty.card}><div style={sty.cardT}>Correia e Roletes</div><div style={sty.grid(4)}><Inp label="Wb" value={inp.Wb} onChange={(v:any)=>s("Wb",v)} unit="kgf/m"/><Inp label="Lonas" value={inp.n_lonas} onChange={(v:any)=>s("n_lonas",v)}/><Inp label="Cap. tensão" value={inp.cap_tens} onChange={(v:any)=>s("cap_tens",v)} unit="N/m"/><Sel label="Classe" value={inp.idler_cl} onChange={(v:any)=>s("idler_cl",v)} options={Object.entries(IDLERS).map(([k,v])=>({v:k,l:v.l}))}/><Inp label="P. rol. carga" value={inp.p_rol_carga} onChange={(v:any)=>s("p_rol_carga",v)} unit="kgf"/><Inp label="Limp." value={inp.n_limp} onChange={(v:any)=>s("n_limp",v)}/><Inp label="Cs" value={inp.Cs} onChange={(v:any)=>s("Cs",v)}/><Inp label="Ft" value={inp.Ft_flex} onChange={(v:any)=>s("Ft_flex",v)} unit="kgf"/></div></div>
+    <div style={sty.card}><div style={sty.cardT}>Motor</div><div style={sty.grid(4)}><Inp label="Freq." value={inp.freq_hz} onChange={(v:any)=>s("freq_hz",v)} unit="Hz"/><Inp label="Polos" value={inp.n_polos} onChange={(v:any)=>s("n_polos",v)}/><Inp label="η corr." value={inp.ef_c} onChange={(v:any)=>s("ef_c",v)}/><Inp label="η red." value={inp.ef_r} onChange={(v:any)=>s("ef_r",v)}/></div></div>
     {res&&<><div style={sty.card}><div style={sty.cardT}>Forças (CEMA Cap.6)</div><div style={sty.grid(4)}><Res label="V utilizada" value={res.V} unit="m/s"/><Res label="Wm" value={res.Wm} unit="kgf/m"/><Res label="Ky" value={res.Ky}/><Res label="Kx" value={res.Kx}/><Res label="Fg" value={res.Fg} unit="kgf"/><Res label="F1" value={res.F1} unit="kgf"/><Res label="Fa" value={res.Fa} unit="kgf"/><Res label="Ta" value={res.Ta} unit="kgf" type="w"/></div></div>
     <div style={sty.card}><div style={sty.cardT}>Potência</div><div style={sty.grid(3)}><Res label="Te" value={res.Te} unit="kgf" type="w"/><Res label="Ne" value={res.Ne_hp} unit="HP"/><Res label="η total" value={res.ef_t}/></div>
       <div style={{marginTop:"10px",padding:"12px",background:C.accentDim,borderRadius:"6px",border:`1px solid ${C.accent}22`}}><div style={sty.grid(3)}>
@@ -459,10 +472,10 @@ function TCMod({onSave}){
   </div>);
 }
 
-// MAIN APP
+// --- APP PRINCIPAL ---
 export default function App(){
-  const[user,setUser]=useState(null);const[mod,setMod]=useState("tc");const[sec,setSec]=useState("mod");
-  const[saveM,setSaveM]=useState(null);const[pName,setPName]=useState("");const[toast,setToast]=useState(null);
+  const[user,setUser]=useState<AnyDict | null>(null);const[mod,setMod]=useState("tc");const[sec,setSec]=useState("mod");
+  const[saveM,setSaveM]=useState<AnyDict | null>(null);const[pName,setPName]=useState("");const[toast,setToast]=useState<string | null>(null);
   const[lm,setLm]=useState("login");const[em,setEm]=useState("");const[pw,setPw]=useState("");const[nm,setNm]=useState("");const[er,setEr]=useState("");
 
   useEffect(()=>{(async()=>{const s=await STORAGE.get("sess:v3");if(s)setUser(s)})()},[]);
@@ -470,8 +483,8 @@ export default function App(){
     if(lm==="register"){if(!nm){setEr("Informe nome");return}const u={email:em,name:nm,pass:pw,createdAt:new Date().toISOString()};await STORAGE.set(`u:${em}`,u);await STORAGE.set("sess:v3",u);setUser(u)}
     else{const u=await STORAGE.get(`u:${em}`);if(!u||u.pass!==pw){setEr("Credenciais inválidas");return}await STORAGE.set("sess:v3",u);setUser(u)}};
   const logout=async()=>{await STORAGE.delete("sess:v3");setUser(null)};
-  const save=(d)=>{setSaveM(d);setPName(`${d.type}_${new Date().toISOString().slice(0,10)}`)};
-  const confirmSave=async()=>{if(!pName)return;await STORAGE.set(`p:${user.email}:${Date.now()}`,{...saveM,name:pName,at:new Date().toISOString()});setSaveM(null);setToast("Salvo!");setTimeout(()=>setToast(null),2e3)};
+  const save=(d: AnyDict)=>{setSaveM(d);setPName(`${d.type}_${new Date().toISOString().slice(0,10)}`)};
+  const confirmSave=async()=>{if(!pName)return;if(user) await STORAGE.set(`p:${user.email}:${Date.now()}`,{...saveM,name:pName,at:new Date().toISOString()});setSaveM(null);setToast("Salvo!");setTimeout(()=>setToast(null),2e3)};
 
   if(!user)return(
     <div style={{minHeight:"100vh",background:"radial-gradient(ellipse at 30% 20%,#0d1117,#060a10 70%)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'IBM Plex Mono',monospace",color:C.text}}>
@@ -483,7 +496,7 @@ export default function App(){
             {["login","register"].map(m=><button key={m} onClick={()=>{setLm(m);setEr("")}} style={{flex:1,padding:"7px",background:lm===m?C.accentDim:"transparent",border:"none",color:lm===m?C.accent:C.dim,cursor:"pointer",fontSize:"10px",letterSpacing:"1px",textTransform:"uppercase",fontFamily:"inherit"}}>{m==="login"?"Entrar":"Cadastrar"}</button>)}
           </div>
           {lm==="register"&&<Inp label="Nome" value={nm} onChange={setNm} type="text"/>}
-          <Inp label="E-mail" value={em} onChange={setEm} type="text"/><Inp label="Senha" value={pw} onChange={setPw} type="text"/>
+          <Inp label="E-mail" value={em} onChange={setEm} type="text"/><Inp label="Senha" value={pw} onChange={setPw} type="password"/>
           {er&&<div style={{color:C.danger,fontSize:"10px",marginBottom:"6px",padding:"5px",background:C.danger+"10",borderRadius:"3px"}}>{er}</div>}
           <button onClick={login} style={{...sty.btn("p"),width:"100%",padding:"9px",marginTop:"4px"}}>{lm==="login"?"ACESSAR":"CRIAR CONTA"}</button>
         </div>
