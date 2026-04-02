@@ -30,12 +30,21 @@ export default async function Page({
     const email = formData.get('email') as string
     const password = formData.get('password') as string
     const name = formData.get('name') as string
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: { data: { name } },
     })
     if (error) redirect(`/?error=${encodeURIComponent(error.message)}`)
+    if (data.user) {
+      await supabase.from('profiles').upsert({
+        id: data.user.id,
+        email,
+        name,
+        modules: [],
+        created_at: new Date().toISOString(),
+      })
+    }
     redirect('/')
   }
 
@@ -50,11 +59,23 @@ export default async function Page({
     return <LoginPage loginAction={loginAction} signupAction={signupAction} error={params.error} />
   }
 
-  const { data: profile } = await supabase
+  let { data: profile } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', user.id)
     .single()
+
+  if (!profile) {
+    const name = user.user_metadata?.name ?? user.email ?? ''
+    await supabase.from('profiles').upsert({
+      id: user.id,
+      email: user.email,
+      name,
+      modules: [],
+      created_at: user.created_at,
+    })
+    profile = { id: user.id, email: user.email, name, modules: [], created_at: user.created_at }
+  }
 
   return <Dashboard user={profile} logoutAction={logoutAction} checkoutStatus={params.status} />
 }
