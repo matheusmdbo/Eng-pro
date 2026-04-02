@@ -6,12 +6,50 @@ import * as THREE from "three";
 // --- TIPOS GLOBAIS ---
 type AnyDict = {[key: string]: any};
 
-// --- ARMAZENAMENTO ---
+// --- ARMAZENAMENTO (com fallback para localStorage) ---
 const STORAGE = {
-  async get(k: string){try{const r=await (window as any).storage.get(k);return r?JSON.parse(r.value):null}catch{return null}},
-  async set(k: string, v: any){try{await (window as any).storage.set(k,JSON.stringify(v));return true}catch{return false}},
-  async list(p: string){try{const r=await (window as any).storage.list(p);return r?.keys||[]}catch{return []}},
-  async delete(k: string){try{await (window as any).storage.delete(k);return true}catch{return false}},
+  async get(k: string){
+    try{
+      if((window as any).storage){
+        const r = await (window as any).storage.get(k);
+        return r ? JSON.parse(r.value) : null;
+      } else {
+        const v = localStorage.getItem(k);
+        return v ? JSON.parse(v) : null;
+      }
+    }catch{return null}
+  },
+  async set(k: string, v: any){
+    try{
+      if((window as any).storage){
+        await (window as any).storage.set(k, JSON.stringify(v));
+      } else {
+        localStorage.setItem(k, JSON.stringify(v));
+      }
+      return true;
+    }catch{return false}
+  },
+  async list(p: string){
+    try{
+      if((window as any).storage && (window as any).storage.list){
+        const r = await (window as any).storage.list(p);
+        return r?.keys || [];
+      } else {
+        // fallback: list localStorage keys that start with prefix p
+        return Object.keys(localStorage).filter(k => k.startsWith(p));
+      }
+    }catch{return []}
+  },
+  async delete(k: string){
+    try{
+      if((window as any).storage){
+        await (window as any).storage.delete(k);
+      } else {
+        localStorage.removeItem(k);
+      }
+      return true;
+    }catch{return false}
+  },
 }
 
 // --- CONSTANTES DE ESTILO ---
