@@ -22,8 +22,8 @@ export async function POST(req: Request) {
     }],
     mode: 'payment',
     metadata: { moduleId, userId: user.id },
-    success_url: `${process.env.NEXT_PUBLIC_BASE_URL}/success`,
-    cancel_url: `${process.env.NEXT_PUBLIC_BASE_URL}/cancel`,
+    success_url: `${process.env.NEXT_PUBLIC_APP_URL}/?status=success`,
+    cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/?status=cancel`,
   })
 
   return new Response(JSON.stringify({ url: session.url }), { status: 200 })
