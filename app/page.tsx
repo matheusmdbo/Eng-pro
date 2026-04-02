@@ -8,6 +8,7 @@ import Dashboard from "./components/Dashboard";
 export default async function Page({ searchParams }: { searchParams: { error?: string, checkout?: string }}) {
   const supabase = createClient();
 
+  // LINHA CORRIGIDA AQUI
   const { { user } } = await supabase.auth.getUser();
   
   let profile = null;

@@ -6,6 +6,8 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 export async function POST(req: Request) {
   const supabase = createClient();
+  
+  // LINHA CORRIGIDA AQUI
   const { { user } } = await supabase.auth.getUser();
 
   if (!user) {
