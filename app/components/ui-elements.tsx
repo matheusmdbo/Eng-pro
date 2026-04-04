@@ -8,6 +8,10 @@ import TransportadorMod, { CONFIG as tcCfg, GLOSSARY as tcGloss } from "../modul
 import SiloMod, { CONFIG as siloCfg, GLOSSARY as siloGloss } from "../modules/silo";
 import MotoMod, { CONFIG as motoCfg, GLOSSARY as motoGloss } from "../modules/motovibrador";
 import PistMod, { CONFIG as pistCfg, GLOSSARY as pistGloss } from "../modules/pistao";
+import TranslacaoMod, { CONFIG as translacaoCfg, GLOSSARY as translacaoGloss } from "../modules/translacao";
+import ElevacaoMod, { CONFIG as elevacaoCfg, GLOSSARY as elevacaoGloss } from "../modules/elevacao";
+import GiroMod, { CONFIG as giroCfg, GLOSSARY as giroGloss } from "../modules/giro";
+import RodaCacambaMod, { CONFIG as rodaCfg, GLOSSARY as rodaGloss } from "../modules/roda_cacamba";
 
 // REGISTRO DE MÓDULOS
 export const MODULES = [
@@ -15,6 +19,10 @@ export const MODULES = [
   { ...siloCfg, Component: SiloMod, glossary: siloGloss },
   { ...motoCfg, Component: MotoMod, glossary: motoGloss },
   { ...pistCfg, Component: PistMod, glossary: pistGloss },
+  { ...translacaoCfg, Component: TranslacaoMod, glossary: translacaoGloss },
+  { ...elevacaoCfg, Component: ElevacaoMod, glossary: elevacaoGloss },
+  { ...giroCfg, Component: GiroMod, glossary: giroGloss },
+  { ...rodaCfg, Component: RodaCacambaMod, glossary: rodaGloss },
 ];
 
 // CORES E ESTILOS

@@ -6,7 +6,7 @@
 // ============================================================
 "use client";
 import { useState } from "react";
-import { ResponsiveContainer, BarChart, Bar, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, Legend, ReferenceLine } from "recharts";
+import { ResponsiveContainer, BarChart, Bar, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, Legend, ReferenceLine, Cell } from "recharts";
 
 export const CONFIG = {
   id: "roda_cacamba", name: "Roda de Caçambas", subtitle: "FEM + BWE (1975)",
