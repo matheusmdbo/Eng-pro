@@ -2,18 +2,22 @@
 // ============================================================
 // PAINEL PRINCIPAL (CLIENT COMPONENT)
 // ============================================================
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import * as THREE from "three";
 import { Inp, Sel, Res, Badge, Tabs, SavedCalcs, Scene3D, C, sty, MODULES } from "./ui-elements";
 
 const UI = { Inp, Sel, Res, Badge, Tabs, SavedCalcs, Scene3D, C, sty };
 
-// 🔥 DEV MODE (controle central)
+// 🔥 DEV MODE
 const DEV_MODE = true;
 
-function GlossaryPanel({moduleId,visible,onClose}:any){const mod=MODULES.find(m=>m.id===moduleId);if(!visible||!mod)return null;return(<div style={{width:"270px",flexShrink:0,background:C.s1,borderLeft:`1px solid ${C.border}`,padding:"12px",overflowY:"auto",maxHeight:"calc(100vh - 40px)"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}><div style={{fontSize:"10px",fontWeight:600,color:C.accent,letterSpacing:"1px"}}>GLOSSÁRIO</div><button onClick={onClose} style={{background:"none",border:"none",color:C.dim,cursor:"pointer",fontSize:"14px",fontFamily:"inherit"}}>✕</button></div>{mod.glossary.map((cat:any,ci:number)=>(<div key={ci} style={{marginBottom:"12px"}}><div style={{fontSize:"8px",fontWeight:600,letterSpacing:"1px",marginBottom:"6px",padding:"3px 6px",borderRadius:"3px",color:cat.cat==="SAÍDA"?C.success:C.warn,background:cat.cat==="SAÍDA"?"rgba(63,185,80,0.06)":"rgba(210,153,34,0.06)",border:`1px solid ${cat.cat==="SAÍDA"?C.success+"22":C.warn+"22"}`}}>{cat.cat}</div>{cat.items.map((it:any,ii:number)=>(<div key={ii} style={{padding:"4px 6px",marginBottom:"2px",borderRadius:"3px",background:ii%2===0?"transparent":C.s2+"44",borderLeft:`2px solid ${cat.cat==="SAÍDA"?C.success+"44":C.warn+"44"}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}><span style={{fontWeight:600,color:C.accent,fontSize:"9px"}}>{it.s}</span>{it.u&&<span style={{fontSize:"7px",color:C.muted,background:C.s3,padding:"1px 3px",borderRadius:"2px"}}>{it.u}</span>}</div><div style={{fontSize:"8px",color:C.dim,marginTop:"1px",lineHeight:"1.3"}}>{it.d}</div></div>))}</div>))}</div>);}
-
 export default function Dashboard({ user, logoutAction, checkoutStatus }: { user: any, logoutAction: any, checkoutStatus?: string }) {
+  
+  // 🔓 GARANTE módulos no DEV
+  const userModules = DEV_MODE
+    ? MODULES.map(m => m.id)
+    : (user?.modules || []);
+
   const [mod, setMod] = useState(MODULES[0].id);
   const [sec, setSec] = useState("mod");
   const [saveM, setSaveM] = useState<any>(null);
@@ -27,6 +31,14 @@ export default function Dashboard({ user, logoutAction, checkoutStatus }: { user
     setTimeout(() => setToast(null), 4000);
   };
 
+  // 🔥 força navegação correta no DEV
+  useEffect(() => {
+    if (DEV_MODE) {
+      setSec("mod");
+      setMod(MODULES[0].id);
+    }
+  }, []);
+
   useEffect(() => {
     if (checkoutStatus === 'success') {
       showToast("Pagamento aprovado! O módulo foi ativado.", "s");
@@ -38,95 +50,126 @@ export default function Dashboard({ user, logoutAction, checkoutStatus }: { user
   }, [checkoutStatus]);
 
   const activate = async (id: string) => {
-    // 🔓 DEV MODE: desativa Stripe
+    // 🔓 DESATIVA PAGAMENTO
     if (DEV_MODE) {
-      showToast("Modo DEV: módulo liberado sem pagamento", "s");
+      showToast("Modo DEV: módulo liberado automaticamente", "s");
       return;
     }
 
     setIsSubmitting(true);
-    const mod = MODULES.find(m => m.id === id);
-    if (!mod) return;
-
     try {
-        const res = await fetch('/api/pay/create-session', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                moduleId: id,
-                moduleName: mod.name,
-                priceInCents: Math.round(mod.price * 100),
-            }),
-        });
+      const res = await fetch('/api/pay/create-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ moduleId: id }),
+      });
 
-        if (res.ok) {
-            const { url } = await res.json();
-            if (url) window.location.href = url;
-        } else {
-            showToast("Erro ao iniciar pagamento.", "d");
-        }
-    } catch (error) {
-        showToast("Erro de conexão.", "d");
+      if (res.ok) {
+        const { url } = await res.json();
+        if (url) window.location.href = url;
+      }
     } finally {
-        setIsSubmitting(false);
+      setIsSubmitting(false);
     }
   };
 
   const save = (d: any) => { setSaveM(d); setPName(`${d.type}_${new Date().toISOString().slice(0, 10)}`) };
-  const confirmSave = async () => { if (!pName) return; localStorage.setItem(`p:${user.email}:${Date.now()}`, JSON.stringify({ ...saveM, name: pName, at: new Date().toISOString() })); setSaveM(null); showToast("Cálculo salvo!", "s") };
-  
+  const confirmSave = async () => {
+    if (!pName) return;
+    localStorage.setItem(`p:${user.email}:${Date.now()}`, JSON.stringify({ ...saveM, name: pName }));
+    setSaveM(null);
+    showToast("Cálculo salvo!", "s");
+  };
+
   const activeMod = MODULES.find(m => m.id === mod);
 
-  // 🔓 DEV MODE libera tudo
-  const canAccess = DEV_MODE ? true : user.modules.includes(mod);
-
-  const activeModules = DEV_MODE
-    ? MODULES
-    : MODULES.filter(m => user.modules.includes(m.id));
-
-  const inactiveModules = DEV_MODE
-    ? []
-    : MODULES.filter(m => !user.modules.includes(m.id));
+  // 🔓 BASEADO NO userModules (corrigido)
+  const canAccess = userModules.includes(mod);
+  const activeModules = MODULES.filter(m => userModules.includes(m.id));
+  const inactiveModules = MODULES.filter(m => !userModules.includes(m.id));
 
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'IBM Plex Mono',monospace", fontSize: "12px" }}>
-      {/* restante do código permanece igual */}
-
-      {sec === "store" && <div>
-        <h2 style={{ margin: "0 0 4px", fontSize: "16px", fontWeight: 700 }}>Módulos Disponíveis</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-          {MODULES.map(m => {
-            const isActive = DEV_MODE ? true : user.modules.includes(m.id);
-
-            return (
-              <div key={m.id} style={{ ...sty.card }}>
-                <div style={{ fontSize: "13px", fontWeight: 700 }}>{m.name}</div>
-
-                <div>
-                  {isActive ? (
-                    <span style={{ color: C.success }}>Ativo</span>
-                  ) : (
-                    <span>R$ {m.price}</span>
-                  )}
-                </div>
-
-                {/* 🔓 DEV MODE: botão desativado */}
-                {!isActive && !DEV_MODE && (
-                  <button onClick={() => activate(m.id)}>
-                    Ativar
-                  </button>
-                )}
-
-                {DEV_MODE && (
-                  <button disabled style={{ opacity: 0.6 }}>
-                    Liberado (DEV)
-                  </button>
-                )}
-              </div>
-            );
-          })}
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
+      
+      {/* HEADER */}
+      <div style={{ padding: "10px", borderBottom: "1px solid #333", display: "flex", justifyContent: "space-between" }}>
+        <div>ENGCALC PRO</div>
+        <div>
+          {user?.name}
+          <form action={logoutAction}>
+            <button>Sair</button>
+          </form>
         </div>
-      </div>}
+      </div>
+
+      <div style={{ display: "flex" }}>
+        
+        {/* SIDEBAR */}
+        <div style={{ width: "200px", borderRight: "1px solid #333", padding: "10px" }}>
+          
+          <div onClick={() => setSec("mod")}>Módulos</div>
+          <div onClick={() => setSec("store")}>Loja</div>
+
+          <hr />
+
+          <div>ATIVOS</div>
+          {activeModules.map(m => (
+            <div key={m.id} onClick={() => { setMod(m.id); setSec("mod"); }}>
+              {m.name}
+            </div>
+          ))}
+        </div>
+
+        {/* CONTEÚDO */}
+        <div style={{ flex: 1, padding: "20px" }}>
+          
+          {/* MÓDULO */}
+          {sec === "mod" && canAccess && activeMod && (
+            <activeMod.Component onSave={save} user={user} UI={UI} />
+          )}
+
+          {/* BLOQUEADO */}
+          {sec === "mod" && !canAccess && (
+            <div>Módulo bloqueado</div>
+          )}
+
+          {/* LOJA */}
+          {sec === "store" && (
+            <div>
+              <h2>Loja</h2>
+
+              {MODULES.map(m => {
+                const isActive = userModules.includes(m.id);
+
+                return (
+                  <div key={m.id} style={{ marginBottom: "10px" }}>
+                    <div>{m.name}</div>
+
+                    {isActive ? (
+                      <span>Ativo</span>
+                    ) : (
+                      <button onClick={() => activate(m.id)} disabled={isSubmitting}>
+                        Ativar
+                      </button>
+                    )}
+
+                    {/* 🔓 DEV MODE */}
+                    {DEV_MODE && <span> (Liberado DEV)</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+        </div>
+      </div>
+
+      {/* TOAST */}
+      {toast && (
+        <div style={{ position: "fixed", bottom: 10, right: 10 }}>
+          {toast.msg}
+        </div>
+      )}
     </div>
   );
 }
