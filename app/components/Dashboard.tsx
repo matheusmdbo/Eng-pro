@@ -24,6 +24,8 @@ export default function Dashboard({ user, logoutAction, checkoutStatus }: { user
     setTimeout(() => setToast(null), 4000);
   };
 
+  // PAGAMENTO DESATIVADO - Comentado o useEffect de checkout
+  /*
   useEffect(() => {
     if (checkoutStatus === 'success') {
       showToast("Pagamento aprovado! O módulo foi ativado.", "s");
@@ -33,8 +35,17 @@ export default function Dashboard({ user, logoutAction, checkoutStatus }: { user
       window.history.replaceState({}, document.title, "/");
     }
   }, [checkoutStatus]);
+  */
 
+  // PAGAMENTO DESATIVADO - Função activate comentada e substituída por ativação direta
   const activate = async (id: string) => {
+    // MODO DE TESTE: Ativa o módulo diretamente sem pagamento
+    showToast("Módulo ativado (modo teste)!", "s");
+    // Aqui você precisaria adicionar o módulo ao user.modules
+    // Como user é read-only, você pode simular recarregando a página
+    // ou criar uma rota API que adicione o módulo diretamente
+    
+    /* CÓDIGO ORIGINAL DE PAGAMENTO - COMENTADO
     setIsSubmitting(true);
     const mod = MODULES.find(m => m.id === id);
     if (!mod) return;
@@ -59,15 +70,20 @@ export default function Dashboard({ user, logoutAction, checkoutStatus }: { user
     } finally {
         setIsSubmitting(false);
     }
+    */
   };
 
   const save = (d: any) => { setSaveM(d); setPName(`${d.type}_${new Date().toISOString().slice(0, 10)}`) };
   const confirmSave = async () => { if (!pName) return; localStorage.setItem(`p:${user.email}:${Date.now()}`, JSON.stringify({ ...saveM, name: pName, at: new Date().toISOString() })); setSaveM(null); showToast("Cálculo salvo!", "s") };
   
   const activeMod = MODULES.find(m => m.id === mod);
-  const canAccess = user.modules.includes(mod);
-  const activeModules = MODULES.filter(m => user.modules.includes(m.id));
-  const inactiveModules = MODULES.filter(m => !user.modules.includes(m.id));
+  
+  // PAGAMENTO DESATIVADO - Todos os módulos liberados para teste
+  const canAccess = true; // Original: user.modules.includes(mod);
+  
+  // PAGAMENTO DESATIVADO - Todos os módulos aparecem como ativos
+  const activeModules = MODULES; // Original: MODULES.filter(m => user.modules.includes(m.id));
+  const inactiveModules: any[] = []; // Original: MODULES.filter(m => !user.modules.includes(m.id));
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'IBM Plex Mono',monospace", fontSize: "12px" }}>
@@ -91,16 +107,10 @@ export default function Dashboard({ user, logoutAction, checkoutStatus }: { user
             {sec === "mod" && !canAccess && <div style={{ ...sty.card, textAlign: "center", padding: "60px 40px" }}><div style={{ fontSize: "40px", marginBottom: "16px" }}>🔒</div><div style={{ fontSize: "16px", fontWeight: 700, marginBottom: "8px" }}>Módulo Bloqueado</div><div style={{ fontSize: "11px", color: C.dim, marginBottom: "20px" }}>Acesse a loja para ativar este módulo.</div><button onClick={() => setSec("store")} style={{ ...sty.btn("p"), padding: "10px 24px" }}>Ir para a Loja</button></div>}
             {sec === "store" && <div>
                 <h2 style={{ margin: "0 0 4px", fontSize: "16px", fontWeight: 700 }}>Módulos Disponíveis</h2>
+                {/* PAGAMENTO DESATIVADO - Badge de modo teste */}
+                <div style={{ padding: "8px 12px", background: C.warn + "22", border: `1px solid ${C.warn}`, borderRadius: "4px", marginBottom: "12px", fontSize: "10px", color: C.warn }}>⚠️ MODO TESTE: Todos os módulos estão liberados sem pagamento</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-                    {MODULES.map(m => {const isActive = user.modules.includes(m.id); return (<div key={m.id} style={{ ...sty.card, padding: "20px", border: isActive ? `1px solid ${C.success}44` : `1px solid ${C.border}`, background: isActive ? "rgba(63,185,80,0.03)" : C.s1, position: "relative" }}>{isActive && <div style={{ position: "absolute", top: "10px", right: "10px", background: C.success + "20", color: C.success, padding: "2px 8px", borderRadius: "10px", fontSize: "8px", fontWeight: 600 }}>ATIVO</div>}<div style={{ fontSize: "20px", marginBottom: "8px" }}>{m.icon}</div><div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "4px" }}>{m.name}</div><div style={{ fontSize: "9px", color: C.accent, marginBottom: "10px" }}>{m.norma}</div><div style={{ fontSize: "10px", color: C.dim, lineHeight: "1.5", marginBottom: "14px", minHeight: "36px" }}>{m.description}</div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>{isActive ? <span style={{ fontSize: "11px", color: C.success, fontWeight: 600 }}>Ativo</span> : <span style={{ fontSize: "18px", fontWeight: 800, color: C.accent }}>R$ {m.price.toFixed(2).replace(".", ",")}</span>}{!isActive && <button onClick={() => activate(m.id)} disabled={isSubmitting} style={{ ...sty.btn("p"), fontSize: "10px", padding: "8px 16px", opacity: isSubmitting ? 0.6 : 1 }}>{isSubmitting ? "..." : "Ativar"}</button>}</div></div>);})}
-                </div>
-            </div>}
-            {sec === "admin" && <div><div style={sty.card}><div style={sty.cardT}>Minha Conta</div><div style={sty.grid(2)}><div><div style={{ fontSize: "8px", color: C.muted }}>NOME</div><div style={{ marginTop: "3px" }}>{user.name}</div></div><div><div style={{ fontSize: "8px", color: C.muted }}>E-MAIL</div><div style={{ marginTop: "3px" }}>{user.email}</div></div><div><div style={{ fontSize: "8px", color: C.muted }}>CRIADO EM</div><div style={{ marginTop: "3px" }}>{new Date(user.created_at).toLocaleDateString("pt-BR")}</div></div><div><div style={{ fontSize: "8px", color: C.muted }}>MÓDULOS</div><div style={{ marginTop: "3px" }}>{user.modules.length}/{MODULES.length}</div></div></div></div></div>}
-        </div>
-        {sec === "mod" && canAccess && <GlossaryPanel moduleId={mod} visible={showGloss} onClose={() => setShowGloss(false)} />}
-      </div>
-      {saveM && <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}><div style={{ ...sty.card, width: "350px" }}><div style={sty.cardT}>Salvar Cálculo</div><Inp label="Nome" value={pName} onChange={setPName} type="text" /><div style={{ display: "flex", gap: "6px", justifyContent: "flex-end", marginTop: "10px" }}><button onClick={() => setSaveM(null)} style={sty.btn("g")}>Cancelar</button><button onClick={confirmSave} style={sty.btn("p")}>Salvar</button></div></div></div>}
-      {toast && <div style={{ position: "fixed", bottom: "16px", right: "16px", padding: "8px 16px", background: toast.type === 's' ? C.success : C.danger, color: "#fff", borderRadius: "4px", fontSize: "11px", fontWeight: 600, zIndex: 300 }}>{toast.msg}</div>}
-    </div>
-  );
-}
+                    {MODULES.map(m => {
+                      // PAGAMENTO DESATIVADO - Todos os módulos aparecem como ativos
+                      const isActive = true; // Original: user.modules.includes(m.id);
+                      return (<div key={m.id} style={{ ...sty.card, padding: "20px", border: isActive ? `1px solid ${C.success}44` : `1px solid ${C.border}`, background: isActive ? "rgba(63,185,80,0.03)" : C.s1, position: "relative" }}>{isActive && <div style={{ position: "absolute", top: "10px", right: "10px", background: C.success + "20", color: C.success, padding: "2px 8px", borderRadius: "10px", fontSize: "8px", fontWeight: 600 }}>ATIVO (TESTE)</div>}<div style={{ fontSize: "20px", marginBottom: "8px" }}>{m.icon}</div><div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "4px" }}>{m.name}</div><div style={{ fontSize: "9px", color: C.accent, marginBottom: "10px" }}>{m.norma}</div><div style={{ fontSize: "10px", color: C.dim, lineHeight: "1.5", marginBottom: "14px", minHeight: "36px" }}>{m.description}</div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>{isActive ? <span style={{ fontSize: "11px", color: C.success, font
