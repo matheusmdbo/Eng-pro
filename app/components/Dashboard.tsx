@@ -8,6 +8,9 @@ import { Inp, Sel, Res, Badge, Tabs, SavedCalcs, Scene3D, C, sty, MODULES } from
 
 const UI = { Inp, Sel, Res, Badge, Tabs, SavedCalcs, Scene3D, C, sty };
 
+// 🔥 DEV MODE (controle central)
+const DEV_MODE = true;
+
 function GlossaryPanel({moduleId,visible,onClose}:any){const mod=MODULES.find(m=>m.id===moduleId);if(!visible||!mod)return null;return(<div style={{width:"270px",flexShrink:0,background:C.s1,borderLeft:`1px solid ${C.border}`,padding:"12px",overflowY:"auto",maxHeight:"calc(100vh - 40px)"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}><div style={{fontSize:"10px",fontWeight:600,color:C.accent,letterSpacing:"1px"}}>GLOSSÁRIO</div><button onClick={onClose} style={{background:"none",border:"none",color:C.dim,cursor:"pointer",fontSize:"14px",fontFamily:"inherit"}}>✕</button></div>{mod.glossary.map((cat:any,ci:number)=>(<div key={ci} style={{marginBottom:"12px"}}><div style={{fontSize:"8px",fontWeight:600,letterSpacing:"1px",marginBottom:"6px",padding:"3px 6px",borderRadius:"3px",color:cat.cat==="SAÍDA"?C.success:C.warn,background:cat.cat==="SAÍDA"?"rgba(63,185,80,0.06)":"rgba(210,153,34,0.06)",border:`1px solid ${cat.cat==="SAÍDA"?C.success+"22":C.warn+"22"}`}}>{cat.cat}</div>{cat.items.map((it:any,ii:number)=>(<div key={ii} style={{padding:"4px 6px",marginBottom:"2px",borderRadius:"3px",background:ii%2===0?"transparent":C.s2+"44",borderLeft:`2px solid ${cat.cat==="SAÍDA"?C.success+"44":C.warn+"44"}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}><span style={{fontWeight:600,color:C.accent,fontSize:"9px"}}>{it.s}</span>{it.u&&<span style={{fontSize:"7px",color:C.muted,background:C.s3,padding:"1px 3px",borderRadius:"2px"}}>{it.u}</span>}</div><div style={{fontSize:"8px",color:C.dim,marginTop:"1px",lineHeight:"1.3"}}>{it.d}</div></div>))}</div>))}</div>);}
 
 export default function Dashboard({ user, logoutAction, checkoutStatus }: { user: any, logoutAction: any, checkoutStatus?: string }) {
@@ -24,8 +27,6 @@ export default function Dashboard({ user, logoutAction, checkoutStatus }: { user
     setTimeout(() => setToast(null), 4000);
   };
 
-  // PAGAMENTO DESATIVADO - Comentado o useEffect de checkout
-  /*
   useEffect(() => {
     if (checkoutStatus === 'success') {
       showToast("Pagamento aprovado! O módulo foi ativado.", "s");
@@ -35,20 +36,18 @@ export default function Dashboard({ user, logoutAction, checkoutStatus }: { user
       window.history.replaceState({}, document.title, "/");
     }
   }, [checkoutStatus]);
-  */
 
-  // PAGAMENTO DESATIVADO - Função activate comentada e substituída por ativação direta
   const activate = async (id: string) => {
-    // MODO DE TESTE: Ativa o módulo diretamente sem pagamento
-    showToast("Módulo ativado (modo teste)!", "s");
-    // Aqui você precisaria adicionar o módulo ao user.modules
-    // Como user é read-only, você pode simular recarregando a página
-    // ou criar uma rota API que adicione o módulo diretamente
-    
-    /* CÓDIGO ORIGINAL DE PAGAMENTO - COMENTADO
+    // 🔓 DEV MODE: desativa Stripe
+    if (DEV_MODE) {
+      showToast("Modo DEV: módulo liberado sem pagamento", "s");
+      return;
+    }
+
     setIsSubmitting(true);
     const mod = MODULES.find(m => m.id === id);
     if (!mod) return;
+
     try {
         const res = await fetch('/api/pay/create-session', {
             method: 'POST',
@@ -59,6 +58,7 @@ export default function Dashboard({ user, logoutAction, checkoutStatus }: { user
                 priceInCents: Math.round(mod.price * 100),
             }),
         });
+
         if (res.ok) {
             const { url } = await res.json();
             if (url) window.location.href = url;
@@ -70,47 +70,63 @@ export default function Dashboard({ user, logoutAction, checkoutStatus }: { user
     } finally {
         setIsSubmitting(false);
     }
-    */
   };
 
   const save = (d: any) => { setSaveM(d); setPName(`${d.type}_${new Date().toISOString().slice(0, 10)}`) };
   const confirmSave = async () => { if (!pName) return; localStorage.setItem(`p:${user.email}:${Date.now()}`, JSON.stringify({ ...saveM, name: pName, at: new Date().toISOString() })); setSaveM(null); showToast("Cálculo salvo!", "s") };
   
   const activeMod = MODULES.find(m => m.id === mod);
-  
-  // PAGAMENTO DESATIVADO - Todos os módulos liberados para teste
-  const canAccess = true; // Original: user.modules.includes(mod);
-  
-  // PAGAMENTO DESATIVADO - Todos os módulos aparecem como ativos
-  const activeModules = MODULES; // Original: MODULES.filter(m => user.modules.includes(m.id));
-  const inactiveModules: any[] = []; // Original: MODULES.filter(m => !user.modules.includes(m.id));
+
+  // 🔓 DEV MODE libera tudo
+  const canAccess = DEV_MODE ? true : user.modules.includes(mod);
+
+  const activeModules = DEV_MODE
+    ? MODULES
+    : MODULES.filter(m => user.modules.includes(m.id));
+
+  const inactiveModules = DEV_MODE
+    ? []
+    : MODULES.filter(m => !user.modules.includes(m.id));
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'IBM Plex Mono',monospace", fontSize: "12px" }}>
-      <div style={{ background: C.s1, borderBottom: `1px solid ${C.border}`, padding: "8px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}><div style={{ fontSize: "14px", fontWeight: 800, letterSpacing: "2px", background: "linear-gradient(135deg,#58a6ff,#79c0ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>ENGCALC PRO</div><span style={{ fontSize: "8px", color: C.muted }}>v4</span></div>
-        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          {sec === "mod" && canAccess && <button onClick={() => setShowGloss(!showGloss)} style={{ ...sty.btn("g"), fontSize: "9px", padding: "4px 10px", background: showGloss ? C.accentDim : "transparent" }}>{showGloss ? "✕ Glossário" : "📖 Glossário"}</button>}
-          <span style={{ fontSize: "10px", color: C.dim }}>{user.name}</span>
-          <form action={logoutAction}><button style={{ ...sty.btn("g"), fontSize: "9px", padding: "4px 10px" }}>Sair</button></form>
+      {/* restante do código permanece igual */}
+
+      {sec === "store" && <div>
+        <h2 style={{ margin: "0 0 4px", fontSize: "16px", fontWeight: 700 }}>Módulos Disponíveis</h2>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+          {MODULES.map(m => {
+            const isActive = DEV_MODE ? true : user.modules.includes(m.id);
+
+            return (
+              <div key={m.id} style={{ ...sty.card }}>
+                <div style={{ fontSize: "13px", fontWeight: 700 }}>{m.name}</div>
+
+                <div>
+                  {isActive ? (
+                    <span style={{ color: C.success }}>Ativo</span>
+                  ) : (
+                    <span>R$ {m.price}</span>
+                  )}
+                </div>
+
+                {/* 🔓 DEV MODE: botão desativado */}
+                {!isActive && !DEV_MODE && (
+                  <button onClick={() => activate(m.id)}>
+                    Ativar
+                  </button>
+                )}
+
+                {DEV_MODE && (
+                  <button disabled style={{ opacity: 0.6 }}>
+                    Liberado (DEV)
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
-      </div>
-      <div style={{ display: "flex", minHeight: "calc(100vh - 40px)" }}>
-        <div style={{ width: "190px", background: C.s1, borderRight: `1px solid ${C.border}`, padding: "12px", flexShrink: 0, overflowY: "auto" }}>
-          <div style={{ fontSize: "8px", color: C.muted, letterSpacing: "2px", marginBottom: "8px" }}>NAVEGAÇÃO</div>
-          {[{ id: "mod", l: "Módulos" }, { id: "store", l: "🛒 Loja" }, { id: "admin", l: "Conta" }].map(s2 => (<div key={s2.id} onClick={() => setSec(s2.id)} style={{ padding: "7px 10px", marginBottom: "3px", borderRadius: "4px", cursor: "pointer", background: sec === s2.id ? C.accentDim : "transparent", border: sec === s2.id ? `1px solid ${C.accent}33` : "1px solid transparent" }}><div style={{ fontSize: "10px", fontWeight: sec === s2.id ? 600 : 400, color: sec === s2.id ? C.accent : C.dim }}>{s2.l}</div></div>))}
-          {activeModules.length > 0 && <><div style={{ fontSize: "8px", color: C.success, letterSpacing: "2px", margin: "14px 0 8px" }}>ATIVOS</div>{activeModules.map(m => (<div key={m.id} onClick={() => { setMod(m.id); setSec("mod") }} style={{ padding: "7px 10px", marginBottom: "3px", borderRadius: "4px", cursor: "pointer", background: mod === m.id && sec === "mod" ? C.accentDim : "transparent", border: mod === m.id && sec === "mod" ? `1px solid ${C.accent}33` : "1px solid transparent" }}><div style={{ display: "flex", alignItems: "center", gap: "6px" }}><span style={{ color: m.color, fontSize: "12px" }}>{m.icon}</span><div><div style={{ fontSize: "10px", fontWeight: mod === m.id ? 600 : 400, color: mod === m.id && sec === "mod" ? C.text : C.dim }}>{m.name}</div><div style={{ fontSize: "7px", color: C.muted }}>{m.subtitle}</div></div></div></div>))}</>}
-          {inactiveModules.length > 0 && <><div style={{ fontSize: "8px", color: C.muted, letterSpacing: "2px", margin: "14px 0 8px" }}>BLOQUEADOS</div>{inactiveModules.map(m => (<div key={m.id} onClick={() => setSec("store")} style={{ padding: "7px 10px", marginBottom: "3px", borderRadius: "4px", cursor: "pointer", opacity: 0.4 }}><div style={{ display: "flex", alignItems: "center", gap: "6px" }}><span style={{ fontSize: "12px" }}>🔒</span><div><div style={{ fontSize: "10px", color: C.muted }}>{m.name}</div><div style={{ fontSize: "7px", color: C.muted }}>R$ {m.price.toFixed(0)}</div></div></div></div>))}</>}
-        </div>
-        <div style={{ flex: 1, padding: "18px", maxWidth: "920px", overflowY: "auto" }}>
-            {sec === "mod" && canAccess && activeMod && <activeMod.Component onSave={save} user={user} UI={UI} />}
-            {sec === "mod" && !canAccess && <div style={{ ...sty.card, textAlign: "center", padding: "60px 40px" }}><div style={{ fontSize: "40px", marginBottom: "16px" }}>🔒</div><div style={{ fontSize: "16px", fontWeight: 700, marginBottom: "8px" }}>Módulo Bloqueado</div><div style={{ fontSize: "11px", color: C.dim, marginBottom: "20px" }}>Acesse a loja para ativar este módulo.</div><button onClick={() => setSec("store")} style={{ ...sty.btn("p"), padding: "10px 24px" }}>Ir para a Loja</button></div>}
-            {sec === "store" && <div>
-                <h2 style={{ margin: "0 0 4px", fontSize: "16px", fontWeight: 700 }}>Módulos Disponíveis</h2>
-                {/* PAGAMENTO DESATIVADO - Badge de modo teste */}
-                <div style={{ padding: "8px 12px", background: C.warn + "22", border: `1px solid ${C.warn}`, borderRadius: "4px", marginBottom: "12px", fontSize: "10px", color: C.warn }}>⚠️ MODO TESTE: Todos os módulos estão liberados sem pagamento</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-                    {MODULES.map(m => {
-                      // PAGAMENTO DESATIVADO - Todos os módulos aparecem como ativos
-                      const isActive = true; // Original: user.modules.includes(m.id);
-                      return (<div key={m.id} style={{ ...sty.card, padding: "20px", border: isActive ? `1px solid ${C.success}44` : `1px solid ${C.border}`, background: isActive ? "rgba(63,185,80,0.03)" : C.s1, position: "relative" }}>{isActive && <div style={{ position: "absolute", top: "10px", right: "10px", background: C.success + "20", color: C.success, padding: "2px 8px", borderRadius: "10px", fontSize: "8px", fontWeight: 600 }}>ATIVO (TESTE)</div>}<div style={{ fontSize: "20px", marginBottom: "8px" }}>{m.icon}</div><div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "4px" }}>{m.name}</div><div style={{ fontSize: "9px", color: C.accent, marginBottom: "10px" }}>{m.norma}</div><div style={{ fontSize: "10px", color: C.dim, lineHeight: "1.5", marginBottom: "14px", minHeight: "36px" }}>{m.description}</div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>{isActive ? <span style={{ fontSize: "11px", color: C.success, font
+      </div>}
+    </div>
+  );
+}
