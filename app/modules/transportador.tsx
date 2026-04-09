@@ -1,612 +1,1022 @@
 // app/modules/transportador.tsx
 // ============================================================
-// MÓDULO: TRANSPORTADOR DE CORREIA — CEMA 7th Edition
-// Redesign inspirado em Mill Trommel Worksheet
-// Paleta original: Azul-petróleo + Cobre + Grafite
+// MÓDULO: TRANSPORTADOR DE CORREIA — CEMA 7th Edition (Expanded)
+// Inspirado em Belt Analyst (Overland Conveyor Co.)
+// Recursos: multi-trecho, área de enchimento, curvas côncava/convexa,
+// editor visual 2D com tambores arrastáveis, 3 tipos de tensionamento,
+// análise completa de resistências CEMA, ângulos máx/mín por material
 // ============================================================
 "use client";
-import { useState, useEffect, useRef } from "react";
-import { ResponsiveContainer, AreaChart, Area, BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, Legend, ReferenceLine, Cell } from "recharts";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 
 export const CONFIG = {
   id: "transportador",
   name: "Transportador de Correia",
-  subtitle: "CEMA 7th Edition",
-  icon: "⟹",
+  subtitle: "CEMA 7th Ed. — Análise Completa",
+  icon: "↗",
   color: "#0a9396",
   price: 299.90,
-  description: "Cálculo completo conforme CEMA 7th Edition. Potência, tensões, roletes, tambores, contrapeso, capacidade, perfil de tensão e visualização 3D interativa.",
-  norma: "CEMA 7th Ed. · Manual FAÇO",
+  description:
+    "Dimensionamento completo de transportador de correia conforme CEMA 7th Edition. Multi-trecho com curvas côncava/convexa, análise de área de enchimento por seção, ângulos máximos/mínimos por material, 3 tipos de tensionamento (gravidade, parafuso, automático), editor visual interativo com tambores arrastáveis em 2D/3D, decomposição completa de resistências (Tx, Ty, Tyc, Tyr, Tac, Tbc, Tpl, Tam), perfil de tensão ao longo da correia, verificação T1≤Tad, sag mínimo, raio mínimo de curvas, e potência por acionamento.",
+  norma: "CEMA 7th Ed. · ISO 5048 · DIN 22101",
 };
 
 export const GLOSSARY = [
-  { cat: "ENTRADA", items: [
-    { s: "mat_d", d: "Densidade do material transportado", u: "kg/m³" },
-    { s: "cap_th", d: "Capacidade de projeto do transportador", u: "t/h" },
-    { s: "vel_ms", d: "Velocidade da correia", u: "m/s" },
-    { s: "comp_m", d: "Comprimento centro a centro", u: "m" },
-    { s: "elev_m", d: "Elevação (desnível) entre cauda e cabeça", u: "m" },
-    { s: "larg_pol", d: "Largura da correia", u: "pol" },
-    { s: "esp_rol", d: "Espaçamento entre roletes de carga", u: "m" },
-    { s: "d_tamb_mm", d: "Diâmetro do tambor motriz", u: "mm" },
-    { s: "ang_abr", d: "Ângulo de abraçamento do tambor motriz", u: "°" },
-    { s: "Wb", d: "Peso da correia por metro", u: "kgf/m" },
-    { s: "cap_tens", d: "Capacidade de tensão da correia", u: "N/m" },
-    { s: "Cs", d: "Fator de atrito material/guias (CEMA Tab. 6-7)", u: "-" },
+  { cat: "MATERIAL", items: [
+    { s: "ρ", d: "Densidade aparente do material", u: "kg/m³" },
+    { s: "Q", d: "Capacidade requerida (vazão mássica)", u: "t/h" },
+    { s: "Φs", d: "Surcharge angle (ângulo de sobrecarga)", u: "°" },
+    { s: "Φr", d: "Repose angle (ângulo de repouso)", u: "°" },
+    { s: "Φm", d: "Ângulo máx. de transporte (material)", u: "°" },
   ]},
-  { cat: "SAÍDA", items: [
-    { s: "V", d: "Velocidade utilizada (máx entre projeto e requerida)", u: "m/s" },
-    { s: "Wm", d: "Peso do material na correia por metro", u: "kgf/m" },
-    { s: "Te", d: "Tensão efetiva na correia (força motriz)", u: "kgf" },
-    { s: "Ne/N_hp/N_kw", d: "Potência efetiva, motor total (HP, kW)", u: "HP/kW" },
-    { s: "T1/T2", d: "Tensões lado tenso e frouxo", u: "kgf" },
-    { s: "Tad", d: "Tensão admissível da correia", u: "kgf" },
+  { cat: "GEOMETRIA / PERFIL", items: [
+    { s: "L", d: "Comprimento total horizontal projetado", u: "m" },
+    { s: "H", d: "Elevação total (cauda → cabeça)", u: "m" },
+    { s: "βi", d: "Ângulo de inclinação do trecho i", u: "°" },
+    { s: "Li", d: "Comprimento do trecho i (real)", u: "m" },
+    { s: "Rcv/Rcc", d: "Raio mín. curva convexa/côncava", u: "m" },
+  ]},
+  { cat: "CORREIA E ROLETES", items: [
+    { s: "B", d: "Largura da correia", u: "pol / mm" },
+    { s: "v", d: "Velocidade da correia", u: "m/s" },
+    { s: "Wb", d: "Peso por metro da correia", u: "kgf/m" },
+    { s: "λ", d: "Ângulo do rolete lateral (trough angle)", u: "°" },
+    { s: "Si", d: "Espaçamento dos roletes de carga", u: "m" },
+    { s: "Sir", d: "Espaçamento dos roletes de retorno", u: "m" },
+    { s: "Au", d: "Área de enchimento útil (seção)", u: "m²" },
+    { s: "Au_max", d: "Área de enchimento máxima teórica (CEMA)", u: "m²" },
+    { s: "Ku", d: "Fator de utilização (Au/Au_max)", u: "-" },
+    { s: "Wm", d: "Peso por metro do material", u: "kgf/m" },
+  ]},
+  { cat: "RESISTÊNCIAS CEMA", items: [
+    { s: "Tx", d: "Resistência por flexão dos roletes (idlers)", u: "kgf" },
+    { s: "Ty", d: "Resistência por flexão da correia", u: "kgf" },
+    { s: "Tyc", d: "Resistência por flexão do material", u: "kgf" },
+    { s: "Tyr", d: "Resistência por flexão correia (retorno)", u: "kgf" },
+    { s: "Tm", d: "Resistência por elevação do material", u: "kgf" },
+    { s: "Tb", d: "Resistência por elevação da correia", u: "kgf" },
+    { s: "Tac", d: "Resistência por acessórios (skirts, plows)", u: "kgf" },
+    { s: "Tbc", d: "Resistência dos limpadores (belt cleaners)", u: "kgf" },
+    { s: "Tpl", d: "Resistência dos plows (raspadores)", u: "kgf" },
+    { s: "Tsb", d: "Resistência dos skirtboards (guias laterais)", u: "kgf" },
+    { s: "Te", d: "Tensão efetiva total (sum dos T's)", u: "kgf" },
+  ]},
+  { cat: "TENSIONAMENTO E TAMBORES", items: [
+    { s: "θ", d: "Ângulo de abraçamento no tambor motor", u: "°" },
+    { s: "μ", d: "Coef. de atrito correia–tambor (lagging)", u: "-" },
+    { s: "Cw", d: "Fator de wrap (Euler) = e^(μθ)", u: "-" },
+    { s: "T1", d: "Tensão no lado tenso (entrada do tambor motor)", u: "kgf" },
+    { s: "T2", d: "Tensão no lado frouxo (saída do tambor motor)", u: "kgf" },
+    { s: "Tad", d: "Tensão admissível da correia (lonas × resistência)", u: "kgf" },
+    { s: "Tsag", d: "Tensão mínima por sag (catenária ≤ 2%)", u: "kgf" },
+    { s: "Wcp", d: "Peso do contrapeso (gravidade)", u: "kgf" },
+  ]},
+  { cat: "ACIONAMENTO", items: [
+    { s: "P_motor", d: "Potência por motor", u: "kW / HP" },
+    { s: "n_mot", d: "Rotação do motor", u: "rpm" },
+    { s: "n_tamb", d: "Rotação do tambor motor", u: "rpm" },
+    { s: "i_red", d: "Relação de redução", u: "-" },
+    { s: "η", d: "Rendimento total (motor·redutor·acopl.)", u: "-" },
   ]},
 ];
 
-// --- Dados CEMA ---
-const KY_T = [{ l: 15, k: .04 }, { l: 30, k: .035 }, { l: 60, k: .033 }, { l: 120, k: .032 }, { l: 240, k: .031 }, { l: 300, k: .03 }, { l: 420, k: .028 }, { l: 600, k: .025 }, { l: 730, k: .024 }, { l: 900, k: .022 }];
-function interpKy(L: number) {
-  if (L <= KY_T[0].l) return KY_T[0].k;
-  if (L >= KY_T[KY_T.length - 1].l) return KY_T[KY_T.length - 1].k;
-  for (let i = 0; i < KY_T.length - 1; i++) {
-    if (L >= KY_T[i].l && L <= KY_T[i + 1].l) {
-      return KY_T[i].k + (L - KY_T[i].l) / (KY_T[i + 1].l - KY_T[i].l) * (KY_T[i + 1].k - KY_T[i].k);
-    }
-  }
-  return .03;
-}
-const CEMA_CAP: any = { 18: 62, 24: 115, 30: 186, 36: 272, 42: 374, 48: 492, 54: 627, 60: 778, 72: 1128, 84: 1548, 96: 2034 };
-const IDLERS: any = { B: { l: "CEMA B", x: 0.88 }, C: { l: "CEMA C", x: 1.00 }, D: { l: "CEMA D", x: 1.09 }, E: { l: "CEMA E", x: 1.18 } };
-const BW = [18, 24, 30, 36, 42, 48, 54, 60, 72, 84, 96];
+// ============================================================
+// CONSTANTES CEMA 7th Ed.
+// ============================================================
 
+// Ky — fator de flexão (CEMA Tab 6.1) — interpolação por L (m)
+const KY_TABLE: [number, number][] = [
+  [30, 0.0407], [60, 0.0379], [90, 0.0355], [120, 0.0334],
+  [150, 0.0316], [180, 0.0301], [210, 0.0287], [240, 0.0274],
+  [270, 0.0263], [300, 0.0252], [360, 0.0233], [420, 0.0218],
+  [480, 0.0204], [540, 0.0193], [600, 0.0183], [750, 0.0163],
+  [900, 0.0149], [1200, 0.0128], [1500, 0.0115], [1800, 0.0106],
+];
+function interpKy(L: number): number {
+  if (L <= KY_TABLE[0][0]) return KY_TABLE[0][1];
+  if (L >= KY_TABLE[KY_TABLE.length - 1][0]) return KY_TABLE[KY_TABLE.length - 1][1];
+  for (let i = 0; i < KY_TABLE.length - 1; i++) {
+    const [x1, y1] = KY_TABLE[i];
+    const [x2, y2] = KY_TABLE[i + 1];
+    if (L >= x1 && L <= x2) return y1 + (y2 - y1) * (L - x1) / (x2 - x1);
+  }
+  return 0.025;
+}
+
+// Capacidade volumétrica por largura (m³/h por m/s) — CEMA Tab 4.3 (3 roletes 35° surcharge 20°)
+const CEMA_CAP_VOL: Record<number, number> = {
+  18: 62, 24: 115, 30: 186, 36: 272, 42: 374, 48: 492,
+  54: 627, 60: 778, 72: 1128, 84: 1548, 96: 2034,
+};
+
+// Larguras padrão CEMA
+export const BW_OPTIONS = [18, 24, 30, 36, 42, 48, 54, 60, 72, 84, 96];
+
+// Classe de roletes CEMA
+const IDLER_CLASS: Record<string, { l: string; A1: number; A2: number; max_load_lb: number }> = {
+  B: { l: "CEMA B (light)", A1: 1.5, A2: 0.0150, max_load_lb: 410 },
+  C: { l: "CEMA C (medium)", A1: 1.8, A2: 0.0180, max_load_lb: 900 },
+  D: { l: "CEMA D (heavy)", A1: 2.4, A2: 0.0220, max_load_lb: 1500 },
+  E: { l: "CEMA E (very heavy)", A1: 3.0, A2: 0.0260, max_load_lb: 2400 },
+  F: { l: "CEMA F (heaviest)", A1: 3.6, A2: 0.0300, max_load_lb: 3600 },
+};
+
+// Material database — densidade, surcharge, repose, ângulo máximo
+export const MATERIAL_DB: Record<string, { name: string; rho: number; phi_s: number; phi_r: number; phi_max: number }> = {
+  iron_ore_pellets: { name: "Pelotas de minério de ferro", rho: 2100, phi_s: 15, phi_r: 30, phi_max: 13 },
+  iron_ore_fines: { name: "Minério de ferro (fino)", rho: 2500, phi_s: 20, phi_r: 35, phi_max: 18 },
+  iron_ore_lump: { name: "Minério de ferro (granulado)", rho: 2400, phi_s: 25, phi_r: 35, phi_max: 18 },
+  coal_run: { name: "Carvão (run-of-mine)", rho: 800, phi_s: 25, phi_r: 38, phi_max: 18 },
+  coal_fine: { name: "Carvão fino", rho: 900, phi_s: 25, phi_r: 35, phi_max: 22 },
+  limestone_crushed: { name: "Calcário britado", rho: 1500, phi_s: 22, phi_r: 38, phi_max: 18 },
+  gravel_dry: { name: "Cascalho seco", rho: 1700, phi_s: 20, phi_r: 35, phi_max: 18 },
+  sand_dry: { name: "Areia seca", rho: 1600, phi_s: 15, phi_r: 30, phi_max: 16 },
+  bauxite: { name: "Bauxita", rho: 1280, phi_s: 25, phi_r: 35, phi_max: 18 },
+  cement_clinker: { name: "Clínquer de cimento", rho: 1400, phi_s: 22, phi_r: 38, phi_max: 18 },
+  custom: { name: "Customizado", rho: 900, phi_s: 20, phi_r: 35, phi_max: 18 },
+};
+
+// ============================================================
+// ÁREA DE ENCHIMENTO — CEMA 7th Ed. (3 roletes iguais)
+// Au = Ab + As, onde:
+//   Ab = área da seção em "U" = f(B, λ, b)
+//   As = área da coroa (surcharge cap)
+// b = largura útil da correia (CEMA: b = 0.9·B – 0.05 para B em metros)
+// ============================================================
+function fillingArea(B_mm: number, lambda_deg: number, phi_s_deg: number) {
+  const B = B_mm / 1000; // m
+  const b = 0.9 * B - 0.05; // largura útil (m)
+  const ll = b / 3; // comprimento de cada rolete (3 iguais)
+  const lambda = lambda_deg * Math.PI / 180;
+  const phi_s = phi_s_deg * Math.PI / 180;
+
+  // Largura no topo da seção em U
+  const bs = ll + 2 * (b - ll) / 2 * Math.cos(lambda);
+  // Altura do trapézio
+  const h = ((b - ll) / 2) * Math.sin(lambda);
+  // Área do trapézio (base lateral inferior + retângulo central)
+  // Decomposição: retângulo (ll × h) + 2 triângulos
+  const A_trap = ll * h + 2 * (0.5 * ((b - ll) / 2) * Math.cos(lambda) * h);
+
+  // Área do "cap" superior (segmento circular surcharge)
+  // Aproximação CEMA: triângulo isósceles com base bs e altura h_s
+  const h_s = (bs / 2) * Math.tan(phi_s);
+  const A_cap = 0.5 * bs * h_s;
+
+  const Au = A_trap + A_cap;
+  // Au máxima teórica (correia plana = 0, λ=0): apenas o cap → muito pequena
+  // Au máxima de referência: λ=45°, phi_s=phi_r → usamos a área para esses valores
+  return { Au, A_trap, A_cap, b_util: b, h_trough: h, h_cap: h_s };
+}
+
+// ============================================================
+// ÂNGULO MÁXIMO DE TRANSPORTE
+// Verifica se algum trecho excede o ângulo máximo do material
+// ============================================================
+function checkMaxAngle(segments: any[], phi_max: number) {
+  const violations: { idx: number; ang: number; max: number }[] = [];
+  segments.forEach((seg, i) => {
+    if (Math.abs(seg.ang) > phi_max) {
+      violations.push({ idx: i, ang: seg.ang, max: phi_max });
+    }
+  });
+  return violations;
+}
+
+// ============================================================
+// RAIOS MÍNIMOS DE CURVAS (CEMA 7th Ed. cap. 9)
+// Convexa: T1 não pode descolar → Rmin = T1 / (Wb · cos(β))
+// Côncava: levantamento da correia → Rmin = T1 / (Wb·g·cos(β))
+// ============================================================
+function minRadius(T1_kgf: number, Wb: number, beta_deg: number) {
+  const beta = beta_deg * Math.PI / 180;
+  const cos_b = Math.max(Math.cos(beta), 0.01);
+  // Convexa: empírico CEMA → Rmin ≈ T1 / (Wb · cos(β)) para correias txteis
+  const R_convex = T1_kgf / (Wb * cos_b);
+  // Côncava: levantamento → mais crítico, fator 1.5
+  const R_concave = 1.5 * T1_kgf / (Wb * cos_b);
+  return { R_convex, R_concave };
+}
+
+// ============================================================
+// CÁLCULO PRINCIPAL — CEMA 7th Ed. com decomposição completa
+// ============================================================
 function calc(inp: any) {
   const g = 9.81;
-  const { mat_d, cap_th, vel_ms, comp_m, elev_m, larg_pol, esp_rol, d_tamb_mm, ang_abr, n_limp, Wb, cap_tens, idler_cl, freq_hz, n_polos, p_rol_carga, comp_guias, Cs, Ft_flex, ef_c = 0.94, ef_r = 0.94, ef_a = 0.96, n_ac = 1 } = inp;
-  const cap_vol = CEMA_CAP[larg_pol] || 500;
-  const V_min_req = cap_th / (mat_d / 1000 * cap_vol);
-  const V = Math.max(vel_ms, V_min_req);
-  const Wm = cap_th * 1000 / (3600 * V);
-  const Ky = interpKy(comp_m);
-  const idx = IDLERS[idler_cl] || IDLERS.C;
-  const Kx = 0.00068 * (Wb + Wm) + idx.x;
-  const Fg = Cs * (comp_guias || 0) * V * V * mat_d / 1000;
-  const F1 = n_limp * 100.8;
-  const Fa = cap_th * 1000 * V / (3600 * g);
-  const Ta = Ky * comp_m * (Wm + Wb + (p_rol_carga / esp_rol)) + Kx * comp_m + Fg + F1 + Fa;
-  const Ft = Ft_flex || 40;
-  const Te = Ta + Ft + (Wm * elev_m);
-  const Ne_hp = (Te * V) / 76;
+  const {
+    // Material
+    mat_d, cap_th, phi_s,
+    // Geometria (multi-trecho)
+    segments, // [{comp:m, ang:°}]
+    // Correia
+    larg_pol, ang_rol, vel_ms, Wb, n_lonas, cap_tens,
+    // Roletes
+    esp_rol, esp_rol_ret, idler_cl, p_rol_carga, p_rol_ret,
+    // Tambor motor
+    d_tamb_mm, ang_abr, mu_lag,
+    // Acessórios
+    n_limp, comp_guias, Cs, n_plows, F_plow,
+    // Acionamento
+    freq_hz, n_polos, n_ac, ef_c, ef_r, ef_a,
+    // Tensionamento
+    tens_type, // "gravity" | "screw" | "automatic"
+  } = inp;
+
+  // ----- Geometria -----
+  const L_h = segments.reduce((a: number, s: any) => a + s.comp * Math.cos(s.ang * Math.PI / 180), 0);
+  const L_total = segments.reduce((a: number, s: any) => a + s.comp, 0);
+  const H_total = segments.reduce((a: number, s: any) => a + s.comp * Math.sin(s.ang * Math.PI / 180), 0);
+  const beta_eq = Math.atan2(H_total, L_h) * 180 / Math.PI;
+
+  // ----- Material e capacidade -----
+  const cap_vol_ref = CEMA_CAP_VOL[larg_pol] || 500; // m³/h por m/s, ref CEMA 35°/20°
+  const fa = fillingArea(larg_pol * 25.4, ang_rol, phi_s);
+  // Au de referência CEMA (35°/20°)
+  const fa_ref = fillingArea(larg_pol * 25.4, 35, 20);
+  const cap_vol_real = cap_vol_ref * (fa.Au / fa_ref.Au); // ajusta pela Au real
+  const V_min = cap_th / (mat_d / 1000 * cap_vol_real);
+  const V = Math.max(vel_ms, V_min);
+  const cap_real = cap_vol_real * V * mat_d / 1000;
+  const Ku = fa.Au / fa_ref.Au; // fator de utilização
+  const Wm = cap_th * 1000 / (3600 * V); // kgf/m
+
+  // ----- Coeficientes -----
+  const Ky = interpKy(L_total);
+  const idx = IDLER_CLASS[idler_cl] || IDLER_CLASS.D;
+  const Kx = 0.00068 * (Wb + Wm) + idx.A1 / esp_rol; // CEMA: A1 lb por idler / espaçamento
+
+  // ----- Resistências CEMA decompostas (kgf) -----
+  // Tx — flexão dos roletes
+  const Tx = Kx * L_total;
+  // Ty — flexão da correia (carga)
+  const Ty = Ky * L_total * (Wb + Wm);
+  // Tyr — flexão da correia (retorno)
+  const Kyr = Ky * 0.6;
+  const Tyr = Kyr * L_total * Wb;
+  // Tyc — não usado separado no CEMA básico (já em Ty), mantido = 0
+  const Tyc = 0;
+  // Tm — elevação do material
+  const Tm = H_total * Wm;
+  // Tb — elevação da correia (zera no fim do ciclo, mas relevante por trecho)
+  const Tb = 0;
+  // Tac — guias laterais (skirts)
+  const Tsb = Cs * (comp_guias || 0) * V * V * mat_d / 1000;
+  // Tbc — limpadores
+  const Tbc = n_limp * 100.8;
+  // Tpl — plows
+  const Tpl = (n_plows || 0) * (F_plow || 0);
+  // Aceleração do material (start to belt speed)
+  const Tam = cap_th * 1000 * V / (3600 * g);
+
+  const Te = Tx + Ty + Tyr + Tm + Tb + Tsb + Tbc + Tpl + Tam;
+
+  // ----- Potência -----
+  const Ne_kw = Te * g * V / 1000; // kW efetivo
   const ef_t = ef_c * ef_r * ef_a;
-  const N_hp = Ne_hp / ef_t;
-  const N_cv = N_hp * 1.01387;
-  const N_kw = N_cv * 0.7355;
-  const N_per = N_hp / n_ac;
+  const N_kw = Ne_kw / ef_t;
+  const N_hp = N_kw / 0.7355;
+  const N_cv = N_kw / 0.7355 * 1.01387;
+  const N_per_kw = N_kw / n_ac;
+  const N_per_hp = N_hp / n_ac;
+
+  // ----- Rotações e redução -----
   const n_sinc = (120 * freq_hz) / n_polos;
   const n_mot = n_sinc * 0.97;
   const n_tamb = (V * 60) / (Math.PI * (d_tamb_mm / 1000));
-  const red = n_mot / n_tamb;
+  const i_red = n_mot / n_tamb;
+
+  // ----- Tensões T1, T2 -----
   const wrap_r = ang_abr * Math.PI / 180;
-  const Cw = Math.exp(0.35 * wrap_r);
+  const Cw = Math.exp(mu_lag * wrap_r);
   const T1 = Te * Cw / (Cw - 1);
   const T2 = T1 - Te;
-  const T_sag = 4.2 * esp_rol * (Wb + Wm);
   const Tad = (cap_tens * (larg_pol * 25.4) / 1000) / g;
-  const contrapeso = 2 * T2;
-  const cap_real = cap_vol * V * mat_d / 1000;
+
+  // ----- Sag (catenária mínima 2%) -----
+  const T_sag_carga = (esp_rol * (Wb + Wm)) / (8 * 0.02);
+  const T_sag_ret = (esp_rol_ret * Wb) / (8 * 0.02);
+  const T_sag = Math.max(T_sag_carga, T_sag_ret);
+
+  // ----- Tensionamento -----
+  let Wcp = 0, screw_travel = 0, auto_force = 0;
+  if (tens_type === "gravity") {
+    Wcp = 2 * T2; // contrapeso = 2·T2 (dois ramais)
+  } else if (tens_type === "screw") {
+    // Curso = elongation total da correia (~1.5%)
+    screw_travel = L_total * 0.015 * 1000; // mm
+  } else if (tens_type === "automatic") {
+    auto_force = 2 * T2;
+  }
+
+  // ----- Raios mínimos de curvas -----
+  const radii = minRadius(T1, Wb, Math.abs(beta_eq));
+
+  // ----- Ângulo máx vs material -----
+  const phi_max_mat = inp.phi_max_mat || 18;
+  const angle_violations = checkMaxAngle(segments, phi_max_mat);
+
+  // ----- Perfil de tensão por trecho -----
+  // Constrói curva integrando resistências distribuídas
   const curve: any[] = [];
-  for (let x = 0; x <= comp_m; x += comp_m / 24) {
+  const npts = 30;
+  let cum_L = 0, cum_H = 0;
+  // Tensão começa em T2 na cauda (lado da volta entra como T2, na carga sai como T1)
+  // Modelo simplificado: T(x) = T2 + (Te) · (x/L_total) ao longo do ramo de carga
+  for (let i = 0; i <= npts; i++) {
+    const x = (L_total * i) / npts;
+    // Encontra o trecho atual
+    let acc = 0, h_acc = 0;
+    for (const seg of segments) {
+      if (acc + seg.comp >= x) {
+        const dx = x - acc;
+        h_acc += dx * Math.sin(seg.ang * Math.PI / 180);
+        break;
+      }
+      acc += seg.comp;
+      h_acc += seg.comp * Math.sin(seg.ang * Math.PI / 180);
+    }
+    const frac = x / L_total;
     curve.push({
       pos: +x.toFixed(1),
-      T_ida: +(T2 + Te * (x / comp_m)).toFixed(0),
-      T_volta: +(T2 * (1 - x / comp_m * 0.1)).toFixed(0),
+      T_carga: +(T2 + Te * frac).toFixed(0),
+      T_volta: +(T2 - Tyr * frac + Tx * 0.4 * frac).toFixed(0),
+      h: +h_acc.toFixed(2),
     });
   }
 
-  // Warnings
-  const warnings: { level: "ok" | "warn" | "bad"; text: string }[] = [];
-  if (T1 > Tad) warnings.push({ level: "bad", text: `Tensão T1 (${T1.toFixed(0)} kgf) excede a tensão admissível Tad (${Tad.toFixed(0)} kgf). Aumente a largura da correia ou reduza o comprimento.` });
-  else if (T1 > Tad * 0.9) warnings.push({ level: "warn", text: `Tensão T1 (${T1.toFixed(0)} kgf) está dentro de 90% da admissível. Considere margem de segurança.` });
-  else warnings.push({ level: "ok", text: `Tensão T1 dentro do limite admissível (${(T1 / Tad * 100).toFixed(1)}% de Tad).` });
-
-  if (cap_real < cap_th) warnings.push({ level: "bad", text: `Capacidade real (${cap_real.toFixed(0)} t/h) é menor que a requerida (${cap_th} t/h). Aumente a velocidade ou a largura.` });
-  else warnings.push({ level: "ok", text: `Capacidade real atende ao requisito (${(cap_real / cap_th * 100).toFixed(0)}% da requerida).` });
-
-  if (vel_ms < V_min_req) warnings.push({ level: "warn", text: `Velocidade de projeto (${vel_ms} m/s) é menor que a velocidade mínima necessária (${V_min_req.toFixed(2)} m/s). Velocidade ajustada para o cálculo.` });
-  if (comp_m > 900) warnings.push({ level: "warn", text: `Comprimento (${comp_m} m) excede a tabela CEMA padrão. Resultado extrapolado.` });
-  if (elev_m / comp_m > 0.3) warnings.push({ level: "warn", text: `Inclinação alta (${(elev_m / comp_m * 100).toFixed(1)}%). Verifique adesão do material à correia.` });
-
-  return { Wm, Ky, Kx, Fg, F1, Fa, Ta, Ft, Te, Ne_hp, N_hp, N_cv, N_kw, N_per, ef_t, n_sinc, n_mot, n_tamb, red, Cw, T1, T2, T_sag, Tad, contrapeso, cap_vol, cap_real, cap_ok: cap_real >= cap_th, V, V_min_req, curve, tension_ok: T1 <= Tad, warnings };
+  return {
+    // Geometria
+    L_total, L_h, H_total, beta_eq,
+    // Material
+    fa, fa_ref, Ku, V_min, V, cap_vol_real, cap_real, Wm,
+    // Coeficientes
+    Ky, Kx,
+    // Resistências
+    Tx, Ty, Tyr, Tyc, Tm, Tb, Tsb, Tbc, Tpl, Tam, Te,
+    // Potência
+    Ne_kw, N_kw, N_hp, N_cv, N_per_kw, N_per_hp, ef_t,
+    // Rotação
+    n_sinc, n_mot, n_tamb, i_red,
+    // Tensões
+    Cw, T1, T2, Tad, T_sag, T_sag_carga, T_sag_ret,
+    // Tensionamento
+    Wcp, screw_travel, auto_force,
+    // Curvas
+    radii, angle_violations,
+    // Perfil
+    curve,
+    // Status
+    cap_ok: cap_real >= cap_th,
+    tension_ok: T1 <= Tad,
+    sag_ok: T2 >= T_sag,
+    angle_ok: angle_violations.length === 0,
+  };
 }
 
 // ============================================================
-// PALETA — Azul-petróleo + Cobre + Grafite
+// AVISOS / VALIDAÇÃO
 // ============================================================
-const PAL = {
-  bg: "#f4f6f8",
-  panel: "#ffffff",
-  primary: "#0a9396",
-  primaryDark: "#005f73",
-  accent: "#ca6702",
-  accentDark: "#9b5708",
-  text: "#001219",
-  muted: "#54677a",
-  border: "#dde4ec",
-  soft: "#e9eef3",
-  ok: "#2a9d8f",
-  warn: "#bb8a36",
-  bad: "#9b2226",
-};
+function generateWarnings(inp: any, res: any) {
+  const items: { level: "ok" | "warn" | "bad"; text: string }[] = [];
 
-const STYLE_ID = "transp-mill-style";
-const STYLES = `
-.tmw-shell { font-family: Inter, "Segoe UI", Arial, sans-serif; color:${PAL.text}; }
-.tmw-shell *, .tmw-shell *::before, .tmw-shell *::after { box-sizing: border-box; }
-.tmw-header {
-  background: linear-gradient(135deg, ${PAL.primaryDark} 0%, ${PAL.primary} 100%);
-  border-radius: 14px; padding: 18px 22px; margin-bottom: 18px;
-  display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center;
-  box-shadow: 0 8px 22px rgba(0,95,115,0.18); color: white;
-}
-.tmw-brand { display:flex; align-items:center; gap:14px; }
-.tmw-brand-mark {
-  width: 50px; height: 50px; border-radius: 12px;
-  background: rgba(255,255,255,0.18); display:grid; place-items:center;
-  border: 1px solid rgba(255,255,255,0.25);
-}
-.tmw-brand-mark svg { width: 32px; height: 32px; }
-.tmw-brand small { display:block; font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:rgba(255,255,255,.78); font-weight:600; }
-.tmw-brand strong { display:block; font-size:18px; font-weight:800; letter-spacing:-.01em; }
-.tmw-header-actions { display:flex; gap:8px; align-items:center; }
-.tmw-btn {
-  border: 1px solid rgba(255,255,255,0.25); background: rgba(255,255,255,0.12);
-  color: white; border-radius: 9px; padding: 9px 14px; font-weight: 700; font-size: 12px;
-  cursor: pointer; transition: all .15s; font-family: inherit;
-}
-.tmw-btn:hover { background: rgba(255,255,255,0.22); }
-.tmw-btn.primary { background: ${PAL.accent}; border-color: ${PAL.accentDark}; box-shadow: 0 3px 10px rgba(202,103,2,0.35); }
-.tmw-btn.primary:hover { background: ${PAL.accentDark}; }
+  if (!res.tension_ok) items.push({ level: "bad",
+    text: `T1 (${res.T1.toFixed(0)} kgf) excede a tensão admissível Tad (${res.Tad.toFixed(0)} kgf). Aumente lonas, capacidade da correia ou reduza Te.` });
 
-.tmw-tool { display:grid; grid-template-columns: 360px minmax(0,1fr); gap:18px; align-items:start; }
-@media (max-width: 1100px) { .tmw-tool { grid-template-columns: 1fr; } }
+  if (!res.cap_ok) items.push({ level: "bad",
+    text: `Capacidade real (${res.cap_real.toFixed(0)} t/h) < requerida (${inp.cap_th} t/h). Aumente velocidade, largura ou densidade.` });
 
-.tmw-panel {
-  background: ${PAL.panel}; border: 1px solid ${PAL.border}; border-radius: 14px;
-  overflow: hidden; box-shadow: 0 8px 24px rgba(0,32,48,0.06);
-}
-.tmw-panel-title {
-  display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
-  padding: 13px 16px; border-bottom: 1px solid ${PAL.border};
-  background: linear-gradient(180deg, ${PAL.soft}, transparent);
-}
-.tmw-panel-title h3 { margin:0; font-size:14px; font-weight:800; color:${PAL.primaryDark}; }
-.tmw-panel-title p { margin:3px 0 0; font-size:11px; color:${PAL.muted}; }
-.tmw-panel-inner { padding: 14px 16px; }
+  if (!res.angle_ok) {
+    res.angle_violations.forEach((v: any) => items.push({ level: "bad",
+      text: `Trecho ${v.idx + 1}: ângulo ${v.ang.toFixed(1)}° excede o máximo do material (${v.max}°). Risco de escorregamento/derrame.` }));
+  }
 
-.tmw-left-col { display: grid; gap: 14px; }
-.tmw-section-h {
-  margin: 14px 0 10px; font-size: 11px; font-weight: 800; letter-spacing: .07em;
-  text-transform: uppercase; color: ${PAL.muted};
-  border-bottom: 1px solid ${PAL.primary}; padding-bottom: 6px;
-}
-.tmw-section-h:first-child { margin-top: 0; }
-.tmw-input-row { margin-bottom: 11px; }
-.tmw-input-head {
-  display:flex; justify-content:space-between; gap:8px; align-items:center;
-}
-.tmw-input-head label { font-size:11px; font-weight:700; color:${PAL.muted}; line-height:1.3; }
-.tmw-input-wrap { display:flex; gap:6px; align-items:center; }
-.tmw-input-row input, .tmw-input-row select {
-  width: 110px; border: 1px solid ${PAL.border}; background: white; color: ${PAL.text};
-  border-radius: 7px; padding: 6px 8px; text-align: right; font: inherit; font-size: 12px;
-}
-.tmw-input-row input:focus, .tmw-input-row select:focus {
-  outline: none; border-color: ${PAL.primary}; box-shadow: 0 0 0 2px rgba(10,147,150,0.15);
-}
-.tmw-unit-chip {
-  display:inline-flex; align-items:center; padding:3px 7px; border-radius:999px;
-  background: ${PAL.soft}; border:1px solid ${PAL.border}; color:${PAL.primaryDark};
-  font-size:10px; font-weight:700; white-space:nowrap;
-}
+  if (!res.sag_ok) items.push({ level: "warn",
+    text: `T2 (${res.T2.toFixed(0)} kgf) abaixo do sag mínimo (${res.T_sag.toFixed(0)} kgf). Aumente o contrapeso para evitar derrame entre roletes.` });
 
-.tmw-badge {
-  display:inline-flex; align-items:center; gap:5px; padding:3px 8px; border-radius:999px;
-  font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.05em;
-  border:1px solid rgba(0,0,0,0.06);
-}
-.tmw-badge.ok { background: rgba(42,157,143,0.12); color:${PAL.ok}; }
-.tmw-badge.warn { background: rgba(187,138,54,0.14); color:${PAL.warn}; }
-.tmw-badge.bad { background: rgba(155,34,38,0.12); color:${PAL.bad}; }
-.tmw-badge.info { background: rgba(10,147,150,0.12); color:${PAL.primaryDark}; }
+  if (res.i_red < 8) items.push({ level: "warn",
+    text: `Redução baixa (${res.i_red.toFixed(1)}:1). Verifique disponibilidade comercial.` });
+  if (res.i_red > 80) items.push({ level: "warn",
+    text: `Redução alta (${res.i_red.toFixed(1)}:1). Considere estágio extra.` });
 
-.tmw-metrics {
-  display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-bottom: 16px;
-}
-@media (max-width: 900px) { .tmw-metrics { grid-template-columns: repeat(2, 1fr); } }
-.tmw-metric {
-  position: relative; overflow: hidden; background: ${PAL.panel};
-  border: 1px solid ${PAL.border}; border-radius: 12px; padding: 13px 14px;
-  box-shadow: 0 4px 12px rgba(0,32,48,0.05);
-}
-.tmw-metric::before {
-  content:""; position:absolute; left:0; top:0; bottom:0; width:4px;
-  background: ${PAL.primary};
-}
-.tmw-metric.primary::before { background: ${PAL.accent}; }
-.tmw-metric-label {
-  font-size:10px; text-transform:uppercase; letter-spacing:.07em;
-  color:${PAL.muted}; font-weight:800; margin-bottom:6px;
-}
-.tmw-metric-val {
-  font-size: 26px; line-height: 1; font-weight: 900; letter-spacing: -.02em;
-  font-variant-numeric: tabular-nums; color: ${PAL.text};
-}
-.tmw-metric.primary .tmw-metric-val { color: ${PAL.accentDark}; }
-.tmw-metric-sub { margin-top:5px; font-size:10px; color:${PAL.muted}; min-height:14px; }
+  if (inp.ang_abr < 180) items.push({ level: "warn",
+    text: `Ângulo de abraçamento ${inp.ang_abr}° < 180°. Use snub pulley para aumentar Cw.` });
 
-.tmw-viz { display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-bottom:16px; }
-@media (max-width: 1100px) { .tmw-viz { grid-template-columns: 1fr; } }
+  if (res.Ku > 1.0) items.push({ level: "warn",
+    text: `Fator de utilização Ku=${res.Ku.toFixed(2)} > 1.0. A seção opera acima da referência CEMA — verifique transbordamento.` });
+  if (res.Ku < 0.5) items.push({ level: "warn",
+    text: `Fator de utilização Ku=${res.Ku.toFixed(2)} < 0.5. Correia subutilizada — considere reduzir largura.` });
 
-.tmw-bottom { display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-bottom:16px; }
-@media (max-width: 1100px) { .tmw-bottom { grid-template-columns: 1fr; } }
+  if (res.N_per_kw > 200) items.push({ level: "warn",
+    text: `Potência por acionamento alta (${res.N_per_kw.toFixed(0)} kW). Considere mais acionamentos.` });
 
-.tmw-table {
-  width:100%; border-collapse:collapse; font-size:12px; background: ${PAL.panel};
-  border-radius: 10px; overflow: hidden;
-}
-.tmw-table th, .tmw-table td {
-  padding: 8px 11px; border-bottom: 1px solid ${PAL.border}; text-align:left; vertical-align:middle;
-}
-.tmw-table th {
-  font-size:10px; text-transform:uppercase; letter-spacing:.06em;
-  color:${PAL.muted}; background: ${PAL.soft}; font-weight:800;
-}
-.tmw-table tr:last-child td { border-bottom:none; }
-.tmw-mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  if (res.radii.R_concave > 100) items.push({ level: "warn",
+    text: `Raio mínimo de curva côncava elevado (${res.radii.R_concave.toFixed(0)} m). Verifique geometria do perfil.` });
 
-.tmw-warn-list { display:grid; gap:8px; margin-top:12px; }
-.tmw-warn-item {
-  border-left: 4px solid ${PAL.primary}; background: ${PAL.soft};
-  border-radius: 8px; padding: 9px 11px; font-size: 12px; line-height:1.45; color:${PAL.text};
-}
-.tmw-warn-item.ok { border-left-color: ${PAL.ok}; }
-.tmw-warn-item.warn { border-left-color: ${PAL.warn}; }
-.tmw-warn-item.bad { border-left-color: ${PAL.bad}; }
+  if (!items.length) items.push({ level: "ok",
+    text: "Todos os critérios CEMA 7th Ed. atendidos. O transportador opera dentro dos limites recomendados." });
 
-.tmw-basis { display:grid; gap:12px; font-size:12px; line-height:1.5; }
-.tmw-basis-box {
-  background: ${PAL.soft}; border: 1px solid ${PAL.border}; border-radius: 10px; padding: 11px 13px;
+  return items;
 }
-.tmw-basis-box h4 {
-  margin: 0 0 7px; font-size: 12px; font-weight: 800; color: ${PAL.primaryDark};
-  text-transform: uppercase; letter-spacing: .04em;
-}
-.tmw-eq {
-  display:flex; justify-content:space-between; gap:14px; padding: 5px 0;
-  border-bottom: 1px dashed ${PAL.border};
-}
-.tmw-eq:last-child { border-bottom:none; }
-.tmw-eq .lhs { font-weight:700; color:${PAL.text}; }
-.tmw-eq .rhs { color:${PAL.muted}; text-align:right; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }
-
-.tmw-viewer-shell { position:relative; height: 380px; background: #0e1620; }
-.tmw-viewer-note {
-  position:absolute; left:12px; top:12px; z-index:2; font-size:11px; font-weight:700;
-  color: white; background: rgba(0,0,0,.5); padding: 5px 10px; border-radius: 999px;
-  border: 1px solid rgba(255,255,255,.15);
-}
-`;
 
 // ============================================================
-// SCHEMATIC 2D
+// EDITOR 2D INTERATIVO — Tambores arrastáveis + Multi-trecho
 // ============================================================
-function Schematic2D({ inp }: { inp: any }) {
-  const w = 540, h = 290, mx = 36;
-  const L = inp?.comp_m || 20;
-  const H = inp?.elev_m || 0;
-  const baseY = h - 70;
-  const rise = (H / Math.max(L, 1)) * (w - 2 * mx) * 0.55;
-  const topY = baseY - rise;
-  const angDeg = Math.atan2(rise, w - 2 * mx) * 180 / Math.PI;
+function InteractiveProfile2D({ inp, res, palette, pulleys, setPulleys, onSegmentChange }: any) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [dragging, setDragging] = useState<number | null>(null);
+  const [hover, setHover] = useState<number | null>(null);
+
+  // Calcula bounding box do perfil
+  const segs = inp.segments;
+  const W = 760, H = 380;
+  const padX = 60, padY = 50;
+
+  // Pontos do perfil (cauda → cabeça) integrando segmentos
+  const profilePts: { x: number; y: number; xm: number; ym: number }[] = [];
+  let cx = 0, cy = 0;
+  profilePts.push({ x: 0, y: 0, xm: 0, ym: 0 });
+  for (const seg of segs) {
+    const dx = seg.comp * Math.cos(seg.ang * Math.PI / 180);
+    const dy = seg.comp * Math.sin(seg.ang * Math.PI / 180);
+    cx += dx; cy += dy;
+    profilePts.push({ x: cx, y: cy, xm: cx, ym: cy });
+  }
+
+  const maxX = Math.max(...profilePts.map(p => p.x)) || 1;
+  const minY = Math.min(...profilePts.map(p => p.y));
+  const maxY = Math.max(...profilePts.map(p => p.y));
+  const rangeY = (maxY - minY) || 1;
+
+  // Escala (preserva aspecto razoável)
+  const sx = (W - 2 * padX) / maxX;
+  const sy = (H - 2 * padY) / Math.max(rangeY * 1.5, 5);
+
+  const toScreen = (xm: number, ym: number) => ({
+    x: padX + xm * sx,
+    y: H - padY - (ym - minY) * sy,
+  });
+
+  // Linha da correia (lado de carga - superior)
+  const beltTop = profilePts.map(p => toScreen(p.x, p.y));
+  // Lado de retorno (offset paralelo abaixo)
+  const beltOffset = 18;
+  const beltBot = beltTop.map(p => ({ x: p.x, y: p.y + beltOffset }));
+
+  // Drag handler
+  const onMouseDown = (i: number) => (e: any) => {
+    e.preventDefault();
+    setDragging(i);
+  };
+  const onMouseMove = (e: any) => {
+    if (dragging === null || !svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const px = ((e.clientX - rect.left) * W) / rect.width;
+    const xm = (px - padX) / sx;
+    setPulleys((prev: any[]) => prev.map((p, i) => i === dragging ? { ...p, x: Math.max(0, Math.min(maxX, xm)) } : p));
+  };
+  const onMouseUp = () => setDragging(null);
 
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: "100%", display: "block" }}>
+    <div style={{ position: "relative" }}>
+      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`}
+        style={{ width: "100%", background: palette.bg1, borderRadius: 8, border: `1px solid ${palette.border}`, cursor: dragging !== null ? "grabbing" : "default" }}
+        onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}>
+
+        {/* Grid */}
+        <defs>
+          <pattern id="grid-tp" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" fill="none" stroke={palette.border} strokeWidth="0.5" opacity="0.4"/>
+          </pattern>
+          <linearGradient id="belt-grad" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor={palette.copper} stopOpacity="0.3"/>
+            <stop offset="100%" stopColor={palette.copper} stopOpacity="0.1"/>
+          </linearGradient>
+        </defs>
+        <rect width={W} height={H} fill="url(#grid-tp)"/>
+
+        {/* Eixo de elevação (esquerda) */}
+        <line x1={padX - 5} y1={padY} x2={padX - 5} y2={H - padY} stroke={palette.muted} strokeWidth="1"/>
+        <text x={padX - 10} y={padY + 5} fill={palette.muted} fontSize="9" textAnchor="end">{maxY.toFixed(1)}m</text>
+        <text x={padX - 10} y={H - padY + 3} fill={palette.muted} fontSize="9" textAnchor="end">{minY.toFixed(1)}m</text>
+        <text x={padX - 35} y={H / 2} fill={palette.muted} fontSize="9" textAnchor="middle" transform={`rotate(-90 ${padX - 35} ${H / 2})`}>Elevação (m)</text>
+
+        {/* Eixo horizontal */}
+        <line x1={padX} y1={H - padY + 8} x2={W - padX} y2={H - padY + 8} stroke={palette.muted} strokeWidth="1"/>
+        <text x={padX} y={H - padY + 22} fill={palette.muted} fontSize="9">0m</text>
+        <text x={W - padX} y={H - padY + 22} fill={palette.muted} fontSize="9" textAnchor="end">{maxX.toFixed(1)}m</text>
+        <text x={W / 2} y={H - 8} fill={palette.muted} fontSize="9" textAnchor="middle">Comprimento horizontal</text>
+
+        {/* Material no lado de carga (área preenchida) */}
+        <path d={
+          "M " + beltTop.map(p => `${p.x},${p.y}`).join(" L ") +
+          " L " + beltTop.slice().reverse().map(p => `${p.x},${p.y - 8}`).join(" L ") + " Z"
+        } fill="url(#belt-grad)" stroke="none"/>
+
+        {/* Correia - lado de carga */}
+        <polyline points={beltTop.map(p => `${p.x},${p.y}`).join(" ")}
+          fill="none" stroke={palette.primary} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+        {/* Correia - retorno */}
+        <polyline points={beltBot.map(p => `${p.x},${p.y}`).join(" ")}
+          fill="none" stroke={palette.primaryDark} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.7"/>
+
+        {/* Marcações dos vértices entre trechos (com ângulos) */}
+        {beltTop.map((p, i) => i > 0 && i < beltTop.length - 1 && (
+          <g key={`v${i}`}>
+            <circle cx={p.x} cy={p.y} r="4" fill={palette.copper} stroke={palette.bg1} strokeWidth="1.5"/>
+            <text x={p.x} y={p.y - 10} fill={palette.copper} fontSize="9" textAnchor="middle" fontWeight="600">
+              {segs[i].ang > 0 ? "+" : ""}{segs[i].ang}°
+            </text>
+          </g>
+        ))}
+
+        {/* Tambores (arrastáveis) */}
+        {pulleys.map((p: any, i: number) => {
+          // encontra y na correia interpolando
+          let y = beltTop[0].y;
+          for (let k = 0; k < profilePts.length - 1; k++) {
+            if (p.x >= profilePts[k].x && p.x <= profilePts[k + 1].x) {
+              const f = (p.x - profilePts[k].x) / (profilePts[k + 1].x - profilePts[k].x || 1);
+              y = beltTop[k].y + f * (beltTop[k + 1].y - beltTop[k].y);
+              break;
+            }
+          }
+          if (p.x >= profilePts[profilePts.length - 1].x) y = beltTop[beltTop.length - 1].y;
+          const sp = toScreen(p.x, 0);
+          const px = sp.x;
+          const py = p.side === "top" ? y : y + beltOffset;
+          const r = p.type === "drive" ? 13 : p.type === "tail" ? 11 : 9;
+          const color = p.type === "drive" ? palette.copper :
+                        p.type === "tail" ? palette.primary :
+                        p.type === "takeup" ? palette.warn :
+                        p.type === "snub" ? palette.muted : palette.primaryLight;
+          return (
+            <g key={i} style={{ cursor: "grab" }}
+              onMouseDown={onMouseDown(i)} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+              <circle cx={px} cy={py} r={r + 2} fill={palette.bg1} stroke={color} strokeWidth="2.5"/>
+              <circle cx={px} cy={py} r={r - 2} fill={color} opacity="0.6"/>
+              <text x={px} y={py + 3} fill={palette.text} fontSize="8" textAnchor="middle" fontWeight="700">{p.label}</text>
+              {hover === i && (
+                <g>
+                  <rect x={px - 60} y={py - 38} width={120} height={28} rx={4} fill={palette.bg0} stroke={color} strokeWidth="1"/>
+                  <text x={px} y={py - 24} fill={palette.text} fontSize="9" textAnchor="middle" fontWeight="600">{p.name}</text>
+                  <text x={px} y={py - 14} fill={palette.muted} fontSize="8" textAnchor="middle">x = {p.x.toFixed(1)}m</text>
+                </g>
+              )}
+            </g>
+          );
+        })}
+
+        {/* Legenda de status */}
+        <g transform={`translate(${W - 180}, 12)`}>
+          <rect x={0} y={0} width={170} height={42} rx={5} fill={palette.bg0} stroke={palette.border}/>
+          <text x={8} y={14} fill={palette.muted} fontSize="8" fontWeight="600">PERFIL CALCULADO</text>
+          <text x={8} y={26} fill={palette.text} fontSize="8">L = {res?.L_total?.toFixed(1) || "—"}m  ·  H = {res?.H_total?.toFixed(1) || "—"}m</text>
+          <text x={8} y={37} fill={palette.text} fontSize="8">β eq = {res?.beta_eq?.toFixed(1) || "—"}°  ·  T1 = {res?.T1?.toFixed(0) || "—"} kgf</text>
+        </g>
+      </svg>
+
+      <div style={{ marginTop: 8, fontSize: 10, color: palette.muted, display: "flex", gap: 16, flexWrap: "wrap" }}>
+        <span>● <strong style={{ color: palette.copper }}>Motor</strong></span>
+        <span>● <strong style={{ color: palette.primary }}>Cauda</strong></span>
+        <span>● <strong style={{ color: palette.warn }}>Tensionamento</strong></span>
+        <span>● <strong style={{ color: palette.muted }}>Snub/Bend</strong></span>
+        <span>· Arraste os tambores para reposicionar</span>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// SEÇÃO TRANSVERSAL — Área de enchimento (CEMA)
+// ============================================================
+function CrossSection({ inp, res, palette }: any) {
+  const W = 360, H = 260;
+  const cx = W / 2, cy = H * 0.65;
+  const B_mm = inp.larg_pol * 25.4;
+  const scale = (W * 0.7) / (B_mm / 1000);
+  const B = (B_mm / 1000) * scale;
+  const lambda = inp.ang_rol * Math.PI / 180;
+  const phi_s = inp.phi_s * Math.PI / 180;
+  const b_util = (B_mm / 1000 * 0.9 - 0.05) * scale;
+  const ll = b_util / 3;
+
+  // 3 roletes
+  const x_ll = cx - ll / 2;
+  const x_lr = cx + ll / 2;
+  const lat_dx = ((b_util - ll) / 2) * Math.cos(lambda);
+  const lat_dy = ((b_util - ll) / 2) * Math.sin(lambda);
+
+  const x_left = x_ll - lat_dx;
+  const y_left = cy - lat_dy;
+  const x_right = x_lr + lat_dx;
+  const y_right = cy - lat_dy;
+
+  // Cap do material
+  const bs = (x_right - x_left);
+  const cap_h = (bs / 2) * Math.tan(phi_s);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: palette.bg1, borderRadius: 8, border: `1px solid ${palette.border}` }}>
       <defs>
-        <linearGradient id="beltGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stopColor={PAL.primary} stopOpacity="0.9" />
-          <stop offset="100%" stopColor={PAL.primaryDark} stopOpacity="0.7" />
-        </linearGradient>
-        <linearGradient id="matGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stopColor={PAL.accent} stopOpacity="0.6" />
-          <stop offset="100%" stopColor={PAL.accent} stopOpacity="0.2" />
+        <linearGradient id="cs-mat" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor={palette.copper} stopOpacity="0.7"/>
+          <stop offset="100%" stopColor={palette.copperDark} stopOpacity="0.9"/>
         </linearGradient>
       </defs>
 
-      {/* Material */}
-      <polygon points={`${mx + 14},${baseY - 6} ${w - mx - 28},${topY - 6} ${w - mx - 28},${topY - 14} ${mx + 14},${baseY - 14}`}
-        fill="url(#matGrad)" stroke={PAL.accent} strokeWidth="0.8" />
+      {/* Material (área de enchimento) */}
+      <path d={`
+        M ${x_left} ${y_left}
+        L ${x_ll} ${cy}
+        L ${x_lr} ${cy}
+        L ${x_right} ${y_right}
+        Q ${cx} ${y_left - cap_h * 1.4}, ${x_left} ${y_left}
+        Z
+      `} fill="url(#cs-mat)" stroke={palette.copper} strokeWidth="1.5"/>
 
-      {/* Correia ida */}
-      <line x1={mx} y1={baseY} x2={w - mx} y2={topY} stroke="url(#beltGrad)" strokeWidth="3" strokeLinecap="round" />
-
-      {/* Correia retorno */}
-      <line x1={mx} y1={baseY + 18} x2={w - mx} y2={topY + 18} stroke={PAL.muted} strokeWidth="1.5" strokeDasharray="5,3" opacity="0.6" />
+      {/* Correia */}
+      <line x1={x_left - 8} y1={y_left + 4} x2={x_ll} y2={cy + 4} stroke={palette.primary} strokeWidth="4" strokeLinecap="round"/>
+      <line x1={x_ll} y1={cy + 4} x2={x_lr} y2={cy + 4} stroke={palette.primary} strokeWidth="4" strokeLinecap="round"/>
+      <line x1={x_lr} y1={cy + 4} x2={x_right + 8} y2={y_right + 4} stroke={palette.primary} strokeWidth="4" strokeLinecap="round"/>
 
       {/* Roletes */}
-      {Array.from({ length: Math.min(22, Math.max(6, Math.floor(L / Math.max(inp?.esp_rol || 1, 0.5)))) }).map((_, i, a) => {
-        const f = i / (a.length - 1);
-        const x = mx + f * (w - 2 * mx);
-        const y = baseY + f * (topY - baseY);
-        return (
-          <g key={i}>
-            <line x1={x} y1={y - 2} x2={x} y2={y + 4} stroke={PAL.primary} strokeWidth="1.2" opacity="0.7" />
-            <circle cx={x} cy={y + 6} r="2" fill={PAL.primary} opacity="0.9" />
-            <circle cx={x} cy={y + 24} r="1.4" fill={PAL.muted} opacity="0.5" />
-          </g>
-        );
-      })}
+      <line x1={x_left - 12} y1={y_left + 8} x2={x_ll - 4} y2={cy + 8} stroke={palette.muted} strokeWidth="6" strokeLinecap="round"/>
+      <line x1={x_ll - 2} y1={cy + 8} x2={x_lr + 2} y2={cy + 8} stroke={palette.muted} strokeWidth="6" strokeLinecap="round"/>
+      <line x1={x_lr + 4} y1={cy + 8} x2={x_right + 12} y2={y_right + 8} stroke={palette.muted} strokeWidth="6" strokeLinecap="round"/>
 
-      {/* Tambor cabeça */}
-      <circle cx={w - mx} cy={topY + 9} r="13" fill="white" stroke={PAL.accent} strokeWidth="2.5" />
-      <circle cx={w - mx} cy={topY + 9} r="5" fill={PAL.accent} />
-      <text x={w - mx} y={topY - 8} fill={PAL.accentDark} fontSize="9" fontWeight="700" textAnchor="middle">ACION.</text>
+      {/* Cotas */}
+      <line x1={x_left} y1={H - 20} x2={x_right} y2={H - 20} stroke={palette.muted} strokeWidth="0.8"/>
+      <line x1={x_left} y1={H - 24} x2={x_left} y2={H - 16} stroke={palette.muted} strokeWidth="0.8"/>
+      <line x1={x_right} y1={H - 24} x2={x_right} y2={H - 16} stroke={palette.muted} strokeWidth="0.8"/>
+      <text x={cx} y={H - 8} fill={palette.muted} fontSize="9" textAnchor="middle">B útil = {((B_mm / 1000 * 0.9 - 0.05) * 1000).toFixed(0)} mm</text>
 
-      {/* Tambor cauda */}
-      <circle cx={mx} cy={baseY + 9} r="11" fill="white" stroke={PAL.primary} strokeWidth="2" />
-      <circle cx={mx} cy={baseY + 9} r="3" fill={PAL.primary} />
-      <text x={mx} y={baseY + 36} fill={PAL.primaryDark} fontSize="9" fontWeight="700" textAnchor="middle">CAUDA</text>
+      {/* Ângulos */}
+      <text x={x_left - 4} y={y_left - 6} fill={palette.primary} fontSize="9" textAnchor="end" fontWeight="600">λ = {inp.ang_rol}°</text>
+      <text x={cx} y={y_left - cap_h * 1.4 - 6} fill={palette.copper} fontSize="9" textAnchor="middle" fontWeight="600">Φs = {inp.phi_s}°</text>
 
-      {/* Dimensões */}
-      <line x1={mx} y1={h - 18} x2={w - mx} y2={h - 18} stroke={PAL.muted} strokeWidth="0.6" />
-      <line x1={mx} y1={h - 22} x2={mx} y2={h - 14} stroke={PAL.muted} strokeWidth="0.6" />
-      <line x1={w - mx} y1={h - 22} x2={w - mx} y2={h - 14} stroke={PAL.muted} strokeWidth="0.6" />
-      <text x={w / 2} y={h - 6} fill={PAL.text} fontSize="11" textAnchor="middle" fontWeight="700">L = {L} m</text>
-
-      {H > 0 && (
-        <>
-          <text x={w - mx + 18} y={(baseY + topY) / 2} fill={PAL.accentDark} fontSize="10" fontWeight="700">H={H}m</text>
-          <text x={w - mx + 18} y={(baseY + topY) / 2 + 13} fill={PAL.muted} fontSize="9">{angDeg.toFixed(1)}°</text>
-        </>
+      {/* Title */}
+      <text x={cx} y={20} fill={palette.text} fontSize="11" textAnchor="middle" fontWeight="700">Seção Transversal</text>
+      {res?.fa && (
+        <g transform={`translate(${W - 140}, 30)`}>
+          <text x={0} y={0} fill={palette.muted} fontSize="9">Au real:</text>
+          <text x={130} y={0} fill={palette.copper} fontSize="9" textAnchor="end" fontWeight="700">{res.fa.Au.toFixed(4)} m²</text>
+          <text x={0} y={14} fill={palette.muted} fontSize="9">Au ref CEMA:</text>
+          <text x={130} y={14} fill={palette.text} fontSize="9" textAnchor="end">{res.fa_ref.Au.toFixed(4)} m²</text>
+          <text x={0} y={28} fill={palette.muted} fontSize="9">Ku:</text>
+          <text x={130} y={28} fill={res.Ku >= 0.9 && res.Ku <= 1.1 ? palette.ok : palette.warn} fontSize="9" textAnchor="end" fontWeight="700">{res.Ku.toFixed(3)}</text>
+        </g>
       )}
+    </svg>
+  );
+}
 
-      <g transform={`translate(${w / 2}, ${(baseY + topY) / 2 - 22})`}>
-        <line x1="-18" y1="0" x2="14" y2="0" stroke={PAL.accent} strokeWidth="1.8" />
-        <polygon points="14,-4 22,0 14,4" fill={PAL.accent} />
-        <text x="0" y="-5" fill={PAL.accentDark} fontSize="9" textAnchor="middle" fontWeight="600">FLUXO</text>
+// ============================================================
+// GRÁFICO DE TENSÃO ao longo da correia
+// ============================================================
+function TensionChart({ res, palette }: any) {
+  if (!res?.curve) return null;
+  const W = 760, H = 280, padL = 60, padR = 30, padT = 20, padB = 40;
+  const data = res.curve;
+  const maxT = Math.max(...data.map((d: any) => Math.max(d.T_carga, d.T_volta)), res.Tad) * 1.1;
+  const maxX = data[data.length - 1].pos;
+
+  const sx = (W - padL - padR) / maxX;
+  const sy = (H - padT - padB) / maxT;
+  const xT = (x: number) => padL + x * sx;
+  const yT = (t: number) => H - padB - t * sy;
+
+  const pathCarga = data.map((d: any, i: number) => `${i === 0 ? "M" : "L"} ${xT(d.pos)} ${yT(d.T_carga)}`).join(" ");
+  const pathVolta = data.map((d: any, i: number) => `${i === 0 ? "M" : "L"} ${xT(d.pos)} ${yT(d.T_volta)}`).join(" ");
+  const areaCarga = pathCarga + ` L ${xT(maxX)} ${yT(0)} L ${xT(0)} ${yT(0)} Z`;
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: palette.bg1, borderRadius: 8, border: `1px solid ${palette.border}` }}>
+      <defs>
+        <linearGradient id="ten-grad" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor={palette.primary} stopOpacity="0.4"/>
+          <stop offset="100%" stopColor={palette.primary} stopOpacity="0.05"/>
+        </linearGradient>
+      </defs>
+
+      {/* Eixos */}
+      <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke={palette.muted} strokeWidth="1"/>
+      <line x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} stroke={palette.muted} strokeWidth="1"/>
+
+      {/* Grid horizontal */}
+      {[0.25, 0.5, 0.75, 1.0].map((f, i) => (
+        <g key={i}>
+          <line x1={padL} y1={yT(maxT * f)} x2={W - padR} y2={yT(maxT * f)} stroke={palette.border} strokeWidth="0.5" strokeDasharray="3,3"/>
+          <text x={padL - 5} y={yT(maxT * f) + 3} fill={palette.muted} fontSize="9" textAnchor="end">{(maxT * f).toFixed(0)}</text>
+        </g>
+      ))}
+
+      {/* Linha Tad (limite) */}
+      <line x1={padL} y1={yT(res.Tad)} x2={W - padR} y2={yT(res.Tad)} stroke={palette.bad} strokeWidth="1.5" strokeDasharray="6,4"/>
+      <text x={W - padR - 4} y={yT(res.Tad) - 4} fill={palette.bad} fontSize="9" textAnchor="end" fontWeight="600">Tad = {res.Tad.toFixed(0)} kgf</text>
+
+      {/* Área e linha da carga */}
+      <path d={areaCarga} fill="url(#ten-grad)"/>
+      <path d={pathCarga} fill="none" stroke={palette.primary} strokeWidth="2.5"/>
+      <path d={pathVolta} fill="none" stroke={palette.copper} strokeWidth="2" strokeDasharray="5,3"/>
+
+      {/* Pontos T1, T2 */}
+      <circle cx={xT(maxX)} cy={yT(res.T1)} r={4} fill={palette.primary} stroke={palette.bg1} strokeWidth="1.5"/>
+      <text x={xT(maxX) - 8} y={yT(res.T1) - 6} fill={palette.primary} fontSize="9" textAnchor="end" fontWeight="700">T1 = {res.T1.toFixed(0)}</text>
+
+      <circle cx={xT(0)} cy={yT(res.T2)} r={4} fill={palette.copper} stroke={palette.bg1} strokeWidth="1.5"/>
+      <text x={xT(0) + 8} y={yT(res.T2) - 6} fill={palette.copper} fontSize="9" fontWeight="700">T2 = {res.T2.toFixed(0)}</text>
+
+      {/* Eixo X labels */}
+      <text x={padL} y={H - padB + 16} fill={palette.muted} fontSize="9">0m (cauda)</text>
+      <text x={W - padR} y={H - padB + 16} fill={palette.muted} fontSize="9" textAnchor="end">{maxX}m (cabeça)</text>
+      <text x={W / 2} y={H - 5} fill={palette.muted} fontSize="9" textAnchor="middle">Posição ao longo da correia</text>
+      <text x={20} y={H / 2} fill={palette.muted} fontSize="9" textAnchor="middle" transform={`rotate(-90 20 ${H / 2})`}>Tensão (kgf)</text>
+
+      {/* Title */}
+      <text x={W / 2} y={14} fill={palette.text} fontSize="11" textAnchor="middle" fontWeight="700">Perfil de Tensão da Correia</text>
+
+      {/* Legend */}
+      <g transform={`translate(${padL + 20}, ${padT + 14})`}>
+        <line x1={0} y1={0} x2={20} y2={0} stroke={palette.primary} strokeWidth="2.5"/>
+        <text x={24} y={3} fill={palette.text} fontSize="9">Lado tenso (carga)</text>
+        <line x1={130} y1={0} x2={150} y2={0} stroke={palette.copper} strokeWidth="2" strokeDasharray="5,3"/>
+        <text x={154} y={3} fill={palette.text} fontSize="9">Lado frouxo (retorno)</text>
       </g>
     </svg>
   );
 }
 
 // ============================================================
-// CROSS-SECTION
+// BARRAS — Decomposição das resistências
 // ============================================================
-function CrossSection({ inp }: { inp: any }) {
-  const w = 280, h = 200;
-  const cx = w / 2, cy = h / 2 + 10;
-  const beltW = 160;
-  const angle = inp.ang_rol || 20;
-  const angRad = angle * Math.PI / 180;
-  const sideW = beltW / 3;
-  const centerW = beltW / 3;
-  const dy = sideW * Math.sin(angRad);
-
-  const x1 = cx - centerW / 2 - sideW * Math.cos(angRad);
-  const x2 = cx - centerW / 2;
-  const x3 = cx + centerW / 2;
-  const x4 = cx + centerW / 2 + sideW * Math.cos(angRad);
-  const y1 = cy - dy;
-  const y2 = cy;
-  const y3 = cy;
-  const y4 = cy - dy;
+function ResistanceBars({ res, palette }: any) {
+  if (!res) return null;
+  const W = 760, H = 240, padL = 80, padR = 20, padT = 20, padB = 40;
+  const items = [
+    { l: "Tx (idlers)", v: res.Tx, c: palette.primary },
+    { l: "Ty (correia)", v: res.Ty, c: palette.primaryLight },
+    { l: "Tyr (retorno)", v: res.Tyr, c: palette.primaryDark },
+    { l: "Tm (elev. mat.)", v: res.Tm, c: palette.copper },
+    { l: "Tsb (skirts)", v: res.Tsb, c: palette.warn },
+    { l: "Tbc (limpadores)", v: res.Tbc, c: palette.muted },
+    { l: "Tpl (plows)", v: res.Tpl, c: palette.copperDark },
+    { l: "Tam (acel.)", v: res.Tam, c: palette.ok },
+  ];
+  const maxV = Math.max(...items.map(i => i.v), 1);
+  const bw = (W - padL - padR) / items.length - 8;
+  const sy = (H - padT - padB) / maxV;
 
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: "100%", display: "block" }}>
-      <defs>
-        <linearGradient id="csGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stopColor={PAL.accent} stopOpacity="0.5" />
-          <stop offset="100%" stopColor={PAL.accent} stopOpacity="0.15" />
-        </linearGradient>
-      </defs>
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: palette.bg1, borderRadius: 8, border: `1px solid ${palette.border}` }}>
+      <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke={palette.muted} strokeWidth="1"/>
+      <line x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} stroke={palette.muted} strokeWidth="1"/>
 
-      <polygon points={`${x1 + 5},${y1 - 18} ${x2 + 2},${y2 - 24} ${x3 - 2},${y3 - 24} ${x4 - 5},${y4 - 18}`}
-        fill="url(#csGrad)" stroke={PAL.accent} strokeWidth="1" />
+      {items.map((it, i) => {
+        const x = padL + 4 + i * (bw + 8);
+        const h = it.v * sy;
+        const y = H - padB - h;
+        return (
+          <g key={i}>
+            <rect x={x} y={y} width={bw} height={h} fill={it.c} opacity="0.85" rx={2}/>
+            <text x={x + bw / 2} y={y - 4} fill={palette.text} fontSize="9" textAnchor="middle" fontWeight="600">{it.v.toFixed(0)}</text>
+            <text x={x + bw / 2} y={H - padB + 14} fill={palette.muted} fontSize="8" textAnchor="middle">{it.l.split(" ")[0]}</text>
+            <text x={x + bw / 2} y={H - padB + 24} fill={palette.muted} fontSize="7" textAnchor="middle">{it.l.split(" ").slice(1).join(" ")}</text>
+          </g>
+        );
+      })}
 
-      <polyline points={`${x1},${y1} ${x2},${y2} ${x3},${y3} ${x4},${y4}`}
-        fill="none" stroke={PAL.primaryDark} strokeWidth="3.5" strokeLinejoin="round" />
-
-      <line x1={x1 - 2} y1={y1 + 2} x2={x2 + 2} y2={y2 + 2} stroke={PAL.muted} strokeWidth="3" strokeLinecap="round" />
-      <line x1={x2 - 2} y1={y2 + 2} x2={x3 + 2} y2={y3 + 2} stroke={PAL.muted} strokeWidth="3" strokeLinecap="round" />
-      <line x1={x3 - 2} y1={y3 + 2} x2={x4 + 2} y2={y4 + 2} stroke={PAL.muted} strokeWidth="3" strokeLinecap="round" />
-
-      <line x1={x1 - 8} y1={y1} x2={x1 - 8} y2={cy + 35} stroke={PAL.muted} strokeWidth="1.5" />
-      <line x1={x4 + 8} y1={y4} x2={x4 + 8} y2={cy + 35} stroke={PAL.muted} strokeWidth="1.5" />
-      <line x1={x1 - 12} y1={cy + 35} x2={x4 + 12} y2={cy + 35} stroke={PAL.muted} strokeWidth="2" />
-
-      <line x1={x1} y1={20} x2={x4} y2={20} stroke={PAL.muted} strokeWidth="0.6" />
-      <line x1={x1} y1={16} x2={x1} y2={24} stroke={PAL.muted} strokeWidth="0.6" />
-      <line x1={x4} y1={16} x2={x4} y2={24} stroke={PAL.muted} strokeWidth="0.6" />
-      <text x={cx} y={14} fill={PAL.text} fontSize="11" textAnchor="middle" fontWeight="700">
-        {inp.larg_pol}" ({(inp.larg_pol * 25.4).toFixed(0)} mm)
-      </text>
-
-      <text x={x1 + 20} y={y1 + 14} fill={PAL.primaryDark} fontSize="9" fontWeight="600">{angle}°</text>
-      <text x={x4 - 24} y={y4 + 14} fill={PAL.primaryDark} fontSize="9" fontWeight="600">{angle}°</text>
-
-      <text x={cx} y={h - 6} fill={PAL.muted} fontSize="9" textAnchor="middle">Seção transversal · 3 roletes</text>
+      <text x={W / 2} y={14} fill={palette.text} fontSize="11" textAnchor="middle" fontWeight="700">Decomposição das Resistências (kgf) — Te = {res.Te.toFixed(0)}</text>
     </svg>
   );
 }
 
 // ============================================================
-// 3D VIEWER
+// VIEWER 3D — Three.js (CDN dinâmico) com perfil multi-trecho
 // ============================================================
-function Viewer3D({ inp }: { inp: any }) {
-  const mountRef = useRef<HTMLDivElement>(null);
-  const sceneRef = useRef<any>(null);
+function ThreeViewer3D({ inp, res, pulleys, palette }: any) {
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     if (!mountRef.current) return;
-    let mounted = true;
-    let frameId = 0;
+    let cleanup: (() => void) | null = null;
+    let cancelled = false;
 
-    const init = async () => {
-      let THREE: any = (window as any).THREE;
-      if (!THREE) {
-        await new Promise<void>((resolve, reject) => {
-          const s = document.createElement("script");
-          s.src = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js";
-          s.onload = () => resolve();
-          s.onerror = () => reject();
-          document.head.appendChild(s);
+    const load = async () => {
+      try {
+        const w: any = window;
+        if (!w.THREE) {
+          await new Promise<void>((resolve, reject) => {
+            const s = document.createElement("script");
+            s.src = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js";
+            s.onload = () => resolve();
+            s.onerror = () => reject();
+            document.head.appendChild(s);
+          });
+          await new Promise<void>((resolve, reject) => {
+            const s = document.createElement("script");
+            s.src = "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js";
+            s.onload = () => resolve();
+            s.onerror = () => reject();
+            document.head.appendChild(s);
+          });
+        }
+        if (cancelled) return;
+        const THREE = w.THREE;
+        const mount = mountRef.current!;
+        const W = mount.clientWidth;
+        const H = 480;
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(palette.bg1);
+        scene.fog = new THREE.Fog(palette.bg1, 40, 200);
+
+        const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 1000);
+        camera.position.set(25, 18, 35);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(W, H);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        mount.innerHTML = "";
+        mount.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.08;
+        controls.target.set(0, 2, 0);
+
+        // Luzes
+        scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+        const dl = new THREE.DirectionalLight(0xffffff, 0.85);
+        dl.position.set(20, 30, 15);
+        scene.add(dl);
+        const dl2 = new THREE.DirectionalLight(0x88aaff, 0.25);
+        dl2.position.set(-15, 10, -20);
+        scene.add(dl2);
+
+        // Grid
+        const grid = new THREE.GridHelper(60, 30, palette.border, palette.border);
+        (grid.material as any).opacity = 0.4;
+        (grid.material as any).transparent = true;
+        scene.add(grid);
+
+        // Cores
+        const beltColor = new THREE.Color(palette.primary);
+        const matColor = new THREE.Color(palette.copper);
+        const drumColor = new THREE.Color(palette.copperDark);
+        const idlerColor = new THREE.Color(palette.muted);
+        const driveColor = new THREE.Color(palette.copper);
+
+        // Calcula pontos do perfil 3D
+        const segs = inp.segments;
+        let cx = 0, cy = 0;
+        const profile: { x: number; y: number }[] = [{ x: 0, y: 0 }];
+        for (const seg of segs) {
+          cx += seg.comp * Math.cos(seg.ang * Math.PI / 180);
+          cy += seg.comp * Math.sin(seg.ang * Math.PI / 180);
+          profile.push({ x: cx, y: cy });
+        }
+        const Lh = profile[profile.length - 1].x;
+        const scale = 30 / (Lh || 1);
+        const proj = profile.map(p => ({ x: p.x * scale - 15, y: p.y * scale + 1 }));
+
+        const Bw = inp.larg_pol * 25.4 / 1000; // m
+        const beltWidth3D = Math.max(Bw * 1.5, 1.2);
+
+        // Constrói correia como tubos cilíndricos por trecho
+        for (let i = 0; i < proj.length - 1; i++) {
+          const a = proj[i], b = proj[i + 1];
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          const ang = Math.atan2(dy, dx);
+          const cxm = (a.x + b.x) / 2, cym = (a.y + b.y) / 2;
+
+          // Lado de carga
+          const loadGeo = new THREE.BoxGeometry(len, 0.12, beltWidth3D);
+          const loadMat = new THREE.MeshStandardMaterial({ color: beltColor, metalness: 0.3, roughness: 0.6 });
+          const loadMesh = new THREE.Mesh(loadGeo, loadMat);
+          loadMesh.position.set(cxm, cym + 0.5, 0);
+          loadMesh.rotation.z = ang;
+          scene.add(loadMesh);
+
+          // Material em cima
+          const matGeo = new THREE.BoxGeometry(len * 0.95, 0.35, beltWidth3D * 0.7);
+          const matMat = new THREE.MeshStandardMaterial({ color: matColor, metalness: 0.1, roughness: 0.85 });
+          const matMesh = new THREE.Mesh(matGeo, matMat);
+          matMesh.position.set(cxm, cym + 0.78, 0);
+          matMesh.rotation.z = ang;
+          scene.add(matMesh);
+
+          // Lado de retorno (paralelo abaixo)
+          const retMesh = new THREE.Mesh(loadGeo.clone(), new THREE.MeshStandardMaterial({ color: beltColor, metalness: 0.3, roughness: 0.6, opacity: 0.7, transparent: true }));
+          retMesh.position.set(cxm, cym - 0.5, 0);
+          retMesh.rotation.z = ang;
+          scene.add(retMesh);
+
+          // Roletes ao longo do trecho
+          const idlerSpacing = inp.esp_rol * scale;
+          const nIdlers = Math.max(2, Math.floor(len / idlerSpacing));
+          for (let k = 0; k <= nIdlers; k++) {
+            const f = k / nIdlers;
+            const ix = a.x + (b.x - a.x) * f;
+            const iy = a.y + (b.y - a.y) * f;
+            // Rolete central
+            const rollGeo = new THREE.CylinderGeometry(0.13, 0.13, beltWidth3D * 0.55, 12);
+            const rollMat = new THREE.MeshStandardMaterial({ color: idlerColor, metalness: 0.7, roughness: 0.3 });
+            const roll = new THREE.Mesh(rollGeo, rollMat);
+            roll.position.set(ix, iy + 0.42, 0);
+            roll.rotation.x = Math.PI / 2;
+            scene.add(roll);
+            // Roletes laterais
+            [-1, 1].forEach(side => {
+              const lat = new THREE.Mesh(rollGeo.clone(), rollMat);
+              lat.position.set(ix, iy + 0.52, side * beltWidth3D * 0.4);
+              lat.rotation.x = Math.PI / 2;
+              lat.rotation.z = side * (inp.ang_rol * Math.PI / 180);
+              scene.add(lat);
+            });
+          }
+        }
+
+        // Tambores nas posições editadas
+        pulleys.forEach((p: any) => {
+          const sx = p.x * scale - 15;
+          // Encontra y interpolando
+          let py = 0;
+          for (let i = 0; i < profile.length - 1; i++) {
+            if (p.x >= profile[i].x && p.x <= profile[i + 1].x) {
+              const f = (p.x - profile[i].x) / (profile[i + 1].x - profile[i].x || 1);
+              py = (proj[i].y + f * (proj[i + 1].y - proj[i].y));
+              break;
+            }
+          }
+          if (p.x >= profile[profile.length - 1].x) py = proj[proj.length - 1].y;
+
+          const r = p.type === "drive" ? 0.9 : p.type === "tail" ? 0.75 : 0.55;
+          const color = p.type === "drive" ? driveColor : drumColor;
+          const drumGeo = new THREE.CylinderGeometry(r, r, beltWidth3D * 1.1, 32);
+          const drumMat = new THREE.MeshStandardMaterial({ color, metalness: 0.85, roughness: 0.25 });
+          const drum = new THREE.Mesh(drumGeo, drumMat);
+          drum.position.set(sx, py + (p.side === "top" ? 0 : -1), 0);
+          drum.rotation.x = Math.PI / 2;
+          scene.add(drum);
+
+          // Eixo
+          const axisGeo = new THREE.CylinderGeometry(0.08, 0.08, beltWidth3D * 1.6, 12);
+          const axis = new THREE.Mesh(axisGeo, new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.9, roughness: 0.2 }));
+          axis.position.copy(drum.position);
+          axis.rotation.x = Math.PI / 2;
+          scene.add(axis);
         });
-        THREE = (window as any).THREE;
-      }
-      if (!mounted || !mountRef.current) return;
 
-      if (!(THREE as any).OrbitControls) {
-        await new Promise<void>((resolve, reject) => {
-          const s = document.createElement("script");
-          s.src = "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js";
-          s.onload = () => resolve();
-          s.onerror = () => reject();
-          document.head.appendChild(s);
-        });
-      }
-      if (!mounted || !mountRef.current) return;
+        // Solo
+        const groundGeo = new THREE.PlaneGeometry(80, 30);
+        const groundMat = new THREE.MeshStandardMaterial({ color: palette.bg2, roughness: 0.95, metalness: 0 });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.y = -0.5;
+        scene.add(ground);
 
-      const mount = mountRef.current;
-      const w = mount.clientWidth || 600;
-      const h = mount.clientHeight || 380;
+        // Animation
+        let raf = 0;
+        const animate = () => {
+          raf = requestAnimationFrame(animate);
+          controls.update();
+          renderer.render(scene, camera);
+        };
+        animate();
+        setLoaded(true);
 
-      const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x0e1620);
-      scene.fog = new THREE.Fog(0x0e1620, 30, 120);
+        const onResize = () => {
+          if (!mount) return;
+          const w = mount.clientWidth;
+          renderer.setSize(w, H);
+          camera.aspect = w / H;
+          camera.updateProjectionMatrix();
+        };
+        window.addEventListener("resize", onResize);
 
-      const camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 500);
-
-      const L = Math.max(inp.comp_m || 20, 5);
-      const H = inp.elev_m || 0;
-      const beltW = (inp.larg_pol || 36) * 25.4 / 1000;
-
-      const sx = Math.min(20 / L, 1.5);
-      const len = L * sx;
-      const elev = H * sx;
-      const bw = Math.max(beltW * sx * 8, 1.5);
-
-      camera.position.set(len * 0.7, len * 0.5 + 2, len * 0.8);
-      camera.lookAt(len / 2, elev / 2, 0);
-
-      const renderer = new THREE.WebGLRenderer({ antialias: true });
-      renderer.setPixelRatio(window.devicePixelRatio || 1);
-      renderer.setSize(w, h);
-      mount.innerHTML = "";
-      mount.appendChild(renderer.domElement);
-
-      scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-      const dl = new THREE.DirectionalLight(0xffffff, 0.7);
-      dl.position.set(15, 25, 15);
-      scene.add(dl);
-      const dl2 = new THREE.DirectionalLight(0x0a9396, 0.3);
-      dl2.position.set(-15, 10, -10);
-      scene.add(dl2);
-
-      const grid = new THREE.GridHelper(40, 40, 0x2a3441, 0x1a2330);
-      scene.add(grid);
-
-      const dx = len, dy = elev;
-      const beltLen = Math.sqrt(dx * dx + dy * dy);
-      const angle = Math.atan2(dy, dx);
-
-      const beltGeom = new THREE.BoxGeometry(beltLen, 0.08, bw);
-      const beltMat = new THREE.MeshStandardMaterial({ color: 0x0a9396, roughness: 0.5, metalness: 0.3 });
-      const beltMesh = new THREE.Mesh(beltGeom, beltMat);
-      beltMesh.position.set(dx / 2, dy / 2 + 0.5, 0);
-      beltMesh.rotation.z = angle;
-      scene.add(beltMesh);
-
-      const matH = bw * 0.18;
-      const matGeom = new THREE.BoxGeometry(beltLen * 0.92, matH, bw * 0.7);
-      const matMat = new THREE.MeshStandardMaterial({ color: 0xca6702, roughness: 0.85 });
-      const matMesh = new THREE.Mesh(matGeom, matMat);
-      matMesh.position.set(dx / 2, dy / 2 + 0.5 + 0.04 + matH / 2, 0);
-      matMesh.rotation.z = angle;
-      scene.add(matMesh);
-
-      const retMesh = new THREE.Mesh(beltGeom.clone(), new THREE.MeshStandardMaterial({ color: 0x54677a, roughness: 0.7 }));
-      retMesh.position.set(dx / 2, dy / 2 + 0.5 - 0.6, 0);
-      retMesh.rotation.z = angle;
-      scene.add(retMesh);
-
-      const drumR = bw * 0.35;
-      const drumGeom = new THREE.CylinderGeometry(drumR, drumR, bw * 1.1, 24);
-      const drumMat = new THREE.MeshStandardMaterial({ color: 0xca6702, roughness: 0.4, metalness: 0.6 });
-      const drumMatTail = new THREE.MeshStandardMaterial({ color: 0x54677a, roughness: 0.4, metalness: 0.6 });
-
-      const drum1 = new THREE.Mesh(drumGeom, drumMat);
-      drum1.position.set(dx, dy + 0.5, 0);
-      drum1.rotation.x = Math.PI / 2;
-      scene.add(drum1);
-
-      const drum2 = new THREE.Mesh(drumGeom, drumMatTail);
-      drum2.position.set(0, 0.5, 0);
-      drum2.rotation.x = Math.PI / 2;
-      scene.add(drum2);
-
-      const nRolos = Math.min(15, Math.max(4, Math.floor(L / Math.max(inp.esp_rol || 1, 0.5))));
-      const rolGeom = new THREE.CylinderGeometry(bw * 0.08, bw * 0.08, bw * 0.95, 12);
-      const rolMat = new THREE.MeshStandardMaterial({ color: 0x9fb0c5, roughness: 0.5, metalness: 0.5 });
-      for (let i = 1; i < nRolos; i++) {
-        const t = i / nRolos;
-        const rol = new THREE.Mesh(rolGeom, rolMat);
-        rol.position.set(dx * t, dy * t + 0.42, 0);
-        rol.rotation.x = Math.PI / 2;
-        scene.add(rol);
-      }
-
-      const controls = new (THREE as any).OrbitControls(camera, renderer.domElement);
-      controls.enableDamping = true;
-      controls.dampingFactor = 0.08;
-      controls.target.set(dx / 2, dy / 2, 0);
-      controls.update();
-
-      const animate = () => {
-        if (!mounted) return;
-        frameId = requestAnimationFrame(animate);
-        controls.update();
-        renderer.render(scene, camera);
-      };
-      animate();
-
-      const onResize = () => {
-        if (!mountRef.current) return;
-        const nw = mountRef.current.clientWidth;
-        const nh = mountRef.current.clientHeight;
-        camera.aspect = nw / nh;
-        camera.updateProjectionMatrix();
-        renderer.setSize(nw, nh);
-      };
-      window.addEventListener("resize", onResize);
-      sceneRef.current = { scene, camera, renderer, controls, cleanup: () => window.removeEventListener("resize", onResize) };
-    };
-
-    init().catch(err => console.error("3D init failed:", err));
-
-    return () => {
-      mounted = false;
-      if (frameId) cancelAnimationFrame(frameId);
-      if (sceneRef.current?.cleanup) sceneRef.current.cleanup();
-      if (sceneRef.current?.renderer) {
-        sceneRef.current.renderer.dispose();
-        if (mountRef.current) mountRef.current.innerHTML = "";
+        cleanup = () => {
+          cancelAnimationFrame(raf);
+          window.removeEventListener("resize", onResize);
+          renderer.dispose();
+          mount.innerHTML = "";
+        };
+      } catch (e) {
+        setError(true);
       }
     };
-  }, [inp.comp_m, inp.elev_m, inp.larg_pol, inp.esp_rol]);
+    load();
+    return () => { cancelled = true; if (cleanup) cleanup(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(inp.segments), JSON.stringify(pulleys), inp.larg_pol, inp.ang_rol, inp.esp_rol, palette.bg1]);
 
+  if (error) return <div style={{ padding: 20, color: palette.bad, textAlign: "center" }}>Erro ao carregar Three.js. Verifique a conexão.</div>;
   return (
-    <div className="tmw-viewer-shell">
-      <div className="tmw-viewer-note">Arraste para orbitar · Scroll para zoom</div>
-      <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
+    <div style={{ position: "relative" }}>
+      <div ref={mountRef} style={{ width: "100%", height: 480, borderRadius: 8, overflow: "hidden", border: `1px solid ${palette.border}` }}/>
+      {!loaded && <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: palette.muted, fontSize: 11 }}>Carregando 3D…</div>}
     </div>
   );
 }
@@ -615,399 +1025,1155 @@ function Viewer3D({ inp }: { inp: any }) {
 // COMPONENTE PRINCIPAL
 // ============================================================
 export default function TransportadorMod({ onSave, user, UI }: any) {
-  const { SavedCalcs } = UI;
-
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    if (document.getElementById(STYLE_ID)) return;
-    const styleEl = document.createElement("style");
-    styleEl.id = STYLE_ID;
-    styleEl.textContent = STYLES;
-    document.head.appendChild(styleEl);
-  }, []);
+  const SavedCalcs = UI?.SavedCalcs;
 
   const [inp, setI] = useState({
-    mat_d: 900, cap_th: 3240, vel_ms: 2.5, comp_m: 19.6, elev_m: 0, larg_pol: 72,
-    ang_rol: 20, esp_rol: 0.5, d_tamb_mm: 630, ang_abr: 180, n_limp: 2, Wb: 59.56,
-    n_lonas: 4, cap_tens: 86298.5, idler_cl: "D", freq_hz: 60, n_polos: 4,
-    p_rol_carga: 40.01, p_rol_ret: 26.8, comp_guias: 16, Cs: 0.0754, Ft_flex: 40.8,
-    ef_c: 0.94, ef_r: 0.94, ef_a: 0.96, n_ac: 2,
+    // Material
+    mat_key: "iron_ore_fines",
+    mat_d: 2500, cap_th: 3240, phi_s: 20, phi_max_mat: 18,
+    // Geometria — multi-trecho
+    segments: [
+      { comp: 19.6, ang: 0 },
+    ],
+    // Correia
+    larg_pol: 72, ang_rol: 35, vel_ms: 2.5, Wb: 59.56, n_lonas: 4, cap_tens: 86298.5,
+    // Roletes
+    esp_rol: 1.0, esp_rol_ret: 3.0, idler_cl: "D", p_rol_carga: 40.01, p_rol_ret: 26.8,
+    // Tambor motor
+    d_tamb_mm: 630, ang_abr: 220, mu_lag: 0.35,
+    // Acessórios
+    n_limp: 2, comp_guias: 16, Cs: 0.0754, n_plows: 0, F_plow: 0,
+    // Acionamento
+    freq_hz: 60, n_polos: 4, n_ac: 2, ef_c: 0.94, ef_r: 0.94, ef_a: 0.96,
+    // Tensionamento
+    tens_type: "gravity",
   });
+
+  const [pulleys, setPulleys] = useState<any[]>([
+    { name: "Tambor de cabeça (motor)", label: "M", type: "drive", x: 19.6, side: "top" },
+    { name: "Tambor de cauda", label: "C", type: "tail", x: 0, side: "top" },
+    { name: "Tambor de tensionamento", label: "T", type: "takeup", x: 2, side: "bot" },
+    { name: "Tambor de desvio (snub)", label: "S", type: "snub", x: 18, side: "bot" },
+  ]);
+
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [res, setR] = useState<any>(null);
+  const [tab, setTab] = useState(0);
 
   const s = (k: string, v: any) => setI(p => ({ ...p, [k]: v }));
-  const handleLoad = (d: any) => { if (d.inp) setI(d.inp); if (d.res) setR(d.res); };
 
-  // Auto-recalcular sempre que inputs mudarem (UX live)
-  useEffect(() => { setR(calc(inp)); }, [inp]);
+  // Sincroniza tambores quando muda o comprimento total dos segmentos
+  useEffect(() => {
+    setR(calc(inp));
+    const Ltot = inp.segments.reduce((a: number, sg: any) => a + sg.comp, 0);
+    setPulleys(prev => prev.map(p => p.type === "drive" ? { ...p, x: Math.min(p.x, Ltot) } : p));
+  }, [inp]);
 
-  const fmt = (v: number, dec = 1) => v == null || !isFinite(v) ? "–" : v.toLocaleString("pt-BR", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  // Quando muda o material da DB, atualiza densidade etc
+  useEffect(() => {
+    if (inp.mat_key && inp.mat_key !== "custom") {
+      const m = MATERIAL_DB[inp.mat_key];
+      if (m) setI(p => ({ ...p, mat_d: m.rho, phi_s: m.phi_s, phi_max_mat: m.phi_max }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inp.mat_key]);
 
-  const NumInp = ({ label, val, k, unit, step = 0.1 }: any) => (
-    <div className="tmw-input-row">
-      <div className="tmw-input-head">
-        <label>{label}</label>
-        <div className="tmw-input-wrap">
-          {unit && <span className="tmw-unit-chip">{unit}</span>}
-          <input type="number" step={step} value={val} onChange={(e) => s(k, parseFloat(e.target.value) || 0)} />
-        </div>
-      </div>
+  // PALETA
+  const palette = useMemo(() => theme === "dark" ? {
+    bg0: "#0e1511", bg1: "#16201b", bg2: "#1d2922",
+    border: "#2f3d34", text: "#e8efe9", muted: "#9ab3a3",
+    primary: "#2d8c70", primaryDark: "#1f6651", primaryLight: "#4ab18e",
+    copper: "#c97b3a", copperDark: "#8a4f1e",
+    ok: "#5fb37a", warn: "#d4a13c", bad: "#d9656a",
+    soft: "#243029",
+  } : {
+    bg0: "#f4f6f1", bg1: "#fbfcf9", bg2: "#f0f3ec",
+    border: "#d6dfd4", text: "#1a2620", muted: "#5e6e63",
+    primary: "#1f6651", primaryDark: "#134438", primaryLight: "#2d8c70",
+    copper: "#a0501e", copperDark: "#6e3711",
+    ok: "#2d7a48", warn: "#9b6a1d", bad: "#9b2c2c",
+    soft: "#e6ede4",
+  }, [theme]);
+
+  const warnings = useMemo(() => res ? generateWarnings(inp, res) : [], [inp, res]);
+
+  const handleLoad = (d: any) => { if (d.inp) setI(d.inp); if (d.res) setR(d.res); if (d.pulleys) setPulleys(d.pulleys); };
+
+  // Helpers de UI
+  const lbl = { color: palette.muted, fontSize: 10, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: 0.4 };
+  const inputSty: any = {
+    background: palette.bg0, color: palette.text, border: `1px solid ${palette.border}`,
+    borderRadius: 5, padding: "6px 8px", fontSize: 12, fontFamily: "inherit",
+    width: "100%", outline: "none", fontVariantNumeric: "tabular-nums",
+  };
+  const card: any = {
+    background: palette.bg1, border: `1px solid ${palette.border}`,
+    borderRadius: 8, padding: 16, marginBottom: 14,
+  };
+  const cardTitle: any = {
+    color: palette.copper, fontSize: 11, fontWeight: 700, textTransform: "uppercase" as const,
+    letterSpacing: 0.6, marginBottom: 12, paddingBottom: 8, borderBottom: `1px solid ${palette.border}`,
+  };
+  const grid = (n: number) => ({ display: "grid", gridTemplateColumns: `repeat(${n}, 1fr)`, gap: 12 });
+
+  const F = ({ label, val, set, unit, step = 1, type = "number" }: any) => (
+    <div>
+      <div style={lbl}>{label}{unit && <span style={{ color: palette.copper, marginLeft: 4 }}>({unit})</span>}</div>
+      <input type={type} value={val} step={step} onChange={(e: any) => set(type === "number" ? +e.target.value : e.target.value)} style={inputSty}/>
+    </div>
+  );
+  const Sel = ({ label, val, set, opts }: any) => (
+    <div>
+      <div style={lbl}>{label}</div>
+      <select value={val} onChange={(e: any) => set(e.target.value)} style={inputSty}>
+        {opts.map((o: any) => <option key={o.v} value={o.v}>{o.l}</option>)}
+      </select>
     </div>
   );
 
-  const SelInp = ({ label, val, k, opts, unit }: any) => (
-    <div className="tmw-input-row">
-      <div className="tmw-input-head">
-        <label>{label}</label>
-        <div className="tmw-input-wrap">
-          {unit && <span className="tmw-unit-chip">{unit}</span>}
-          <select value={val} onChange={(e) => {
-            const raw = e.target.value;
-            const num = Number(raw);
-            s(k, !isNaN(num) && raw !== "" ? num : raw);
-          }}>
-            {opts.map((o: any) => <option key={o.v} value={o.v}>{o.l}</option>)}
-          </select>
-        </div>
-      </div>
-    </div>
-  );
+  const tabs = [
+    { l: "Material", i: 0 },
+    { l: "Geometria", i: 1 },
+    { l: "Correia / Roletes", i: 2 },
+    { l: "Tambores", i: 3 },
+    { l: "Tensionamento", i: 4 },
+    { l: "Acionamento", i: 5 },
+    { l: "Resultados", i: 6 },
+    { l: "2D Interativo", i: 7 },
+    { l: "3D", i: 8 },
+    { l: "Equações", i: 9 },
+    { l: "Avisos", i: 10 },
+  ];
 
-  const allOk = res && res.tension_ok && res.cap_ok;
-  const statusBadge = !res ? { cls: "info", text: "Aguardando" } :
-    allOk ? { cls: "ok", text: "Aprovado" } :
-      res.tension_ok ? { cls: "warn", text: "Verificar capacidade" } :
-        { cls: "bad", text: "T1 > Tad" };
-
-  // Cores para barras de força
-  const forceData = res ? [
-    { n: "Fg", v: +res.Fg.toFixed(0), full: "Atrito guias", fill: PAL.primary },
-    { n: "F1", v: +res.F1.toFixed(0), full: "Limpadores", fill: PAL.primary },
-    { n: "Fa", v: +res.Fa.toFixed(0), full: "Aceleração", fill: PAL.primary },
-    { n: "Ta", v: +res.Ta.toFixed(0), full: "Resistência total", fill: PAL.warn },
-    { n: "Te", v: +res.Te.toFixed(0), full: "Tensão efetiva", fill: PAL.accent },
-  ] : [];
-
+  // ============== RENDER ==============
   return (
-    <div className="tmw-shell">
+    <div style={{
+      background: palette.bg0, color: palette.text,
+      fontFamily: 'Inter, "Segoe UI", system-ui, sans-serif',
+      margin: "-12px", minHeight: "100%", borderRadius: 8,
+    }}>
       {/* HEADER */}
-      <div className="tmw-header">
-        <div className="tmw-brand">
-          <div className="tmw-brand-mark">
-            <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="none">
-              <ellipse cx="14" cy="38" rx="8" ry="8" stroke="white" strokeWidth="3" />
-              <ellipse cx="50" cy="26" rx="8" ry="8" stroke="white" strokeWidth="3" />
-              <line x1="14" y1="30" x2="50" y2="18" stroke="white" strokeWidth="3" strokeLinecap="round" />
-              <line x1="14" y1="46" x2="50" y2="34" stroke="white" strokeWidth="3" strokeLinecap="round" />
-              <circle cx="22" cy="26" r="1.5" fill="#ca6702" />
-              <circle cx="30" cy="24" r="1.5" fill="#ca6702" />
-              <circle cx="38" cy="22" r="1.5" fill="#ca6702" />
-            </svg>
-          </div>
+      <div style={{
+        background: `linear-gradient(135deg, ${palette.primaryDark}, ${palette.primary})`,
+        padding: "16px 22px", borderRadius: "8px 8px 0 0",
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{
+            width: 44, height: 44, borderRadius: 10,
+            background: "rgba(255,255,255,0.14)", display: "grid", placeItems: "center",
+            border: "1px solid rgba(255,255,255,0.22)", color: palette.copper, fontSize: 22, fontWeight: 800,
+          }}>↗</div>
           <div>
-            <small>CEMA Worksheet</small>
-            <strong>Transportador de Correia</strong>
+            <div style={{ color: "#fff", fontSize: 20, fontWeight: 700, letterSpacing: 0.3 }}>Transportador de Correia</div>
+            <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 11, marginTop: 2 }}>CEMA 7th Edition · Análise Completa (Belt Analyst-style)</div>
           </div>
         </div>
-        <div className="tmw-header-actions">
-          <SavedCalcs user={user} moduleType="transportador" onLoad={handleLoad} />
-          <button className="tmw-btn" onClick={() => onSave({ type: "transportador", inp, res })}>Salvar</button>
-          <button className="tmw-btn primary" onClick={() => setR(calc(inp))}>Recalcular</button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button onClick={() => setTheme(t => t === "dark" ? "light" : "dark")} style={{
+            background: "rgba(255,255,255,0.15)", color: "#fff", border: "1px solid rgba(255,255,255,0.25)",
+            borderRadius: 6, padding: "7px 12px", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+          }}>{theme === "dark" ? "☼ Claro" : "☾ Escuro"}</button>
+          {SavedCalcs && <SavedCalcs user={user} moduleType="transportador" onLoad={handleLoad}/>}
+          <button onClick={() => onSave?.({ type: "transportador", inp, res, pulleys })} style={{
+            background: palette.copper, color: "#fff", border: "none", borderRadius: 6,
+            padding: "8px 14px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+          }}>SALVAR</button>
         </div>
       </div>
 
-      <div className="tmw-tool">
-        {/* COLUNA ESQUERDA */}
-        <div className="tmw-left-col">
-          <section className="tmw-panel">
-            <div className="tmw-panel-title">
-              <div>
-                <h3>Dados de Entrada</h3>
-                <p>Parâmetros do projeto e da correia</p>
-              </div>
-              <span className={`tmw-badge ${statusBadge.cls}`}>{statusBadge.text}</span>
-            </div>
-            <div className="tmw-panel-inner">
-              <h4 className="tmw-section-h">Material e Capacidade</h4>
-              <NumInp label="Densidade" val={inp.mat_d} k="mat_d" unit="kg/m³" step={10} />
-              <NumInp label="Capacidade" val={inp.cap_th} k="cap_th" unit="t/h" step={10} />
-              <NumInp label="Velocidade" val={inp.vel_ms} k="vel_ms" unit="m/s" step={0.1} />
-              <NumInp label="Nº acionamentos" val={inp.n_ac} k="n_ac" step={1} />
+      {/* TAB BAR */}
+      <div style={{
+        display: "flex", gap: 4, padding: "10px 14px 0", background: palette.bg1,
+        borderBottom: `1px solid ${palette.border}`, flexWrap: "wrap",
+      }}>
+        {tabs.map(t => (
+          <button key={t.i} onClick={() => setTab(t.i)} style={{
+            background: tab === t.i ? palette.bg0 : "transparent",
+            color: tab === t.i ? palette.copper : palette.muted,
+            border: `1px solid ${tab === t.i ? palette.border : "transparent"}`,
+            borderBottom: tab === t.i ? `1px solid ${palette.bg0}` : `1px solid transparent`,
+            borderRadius: "6px 6px 0 0", padding: "8px 14px", fontSize: 11, fontWeight: tab === t.i ? 700 : 500,
+            cursor: "pointer", fontFamily: "inherit", marginBottom: -1,
+          }}>{t.l}</button>
+        ))}
+      </div>
 
-              <h4 className="tmw-section-h">Geometria</h4>
-              <NumInp label="Comprimento (CC)" val={inp.comp_m} k="comp_m" unit="m" step={0.5} />
-              <NumInp label="Elevação" val={inp.elev_m} k="elev_m" unit="m" step={0.5} />
-              <SelInp label="Largura correia" val={inp.larg_pol} k="larg_pol" unit="pol" opts={BW.map(w => ({ v: w, l: `${w}" (${(w * 25.4).toFixed(0)} mm)` }))} />
-              <NumInp label="Ângulo dos rolos" val={inp.ang_rol} k="ang_rol" unit="°" step={1} />
-              <NumInp label="Espaçamento rolos" val={inp.esp_rol} k="esp_rol" unit="m" step={0.05} />
-              <NumInp label="Comprimento guias" val={inp.comp_guias} k="comp_guias" unit="m" step={0.5} />
-              <NumInp label="Ø tambor motriz" val={inp.d_tamb_mm} k="d_tamb_mm" unit="mm" step={10} />
-              <NumInp label="Ângulo abraçamento" val={inp.ang_abr} k="ang_abr" unit="°" step={5} />
+      {/* MÉTRICAS PRINCIPAIS (sempre visíveis) */}
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: 8,
+        padding: "14px 14px 0", background: palette.bg0,
+      }}>
+        {[
+          { l: "Capacidade", v: res?.cap_real?.toFixed(0) || "—", u: "t/h", c: res?.cap_ok ? palette.ok : palette.bad },
+          { l: "Velocidade", v: res?.V?.toFixed(2) || "—", u: "m/s", c: palette.text },
+          { l: "Te", v: res?.Te?.toFixed(0) || "—", u: "kgf", c: palette.text },
+          { l: "T1 / Tad", v: res ? `${res.T1.toFixed(0)} / ${res.Tad.toFixed(0)}` : "—", u: "kgf", c: res?.tension_ok ? palette.ok : palette.bad },
+          { l: "Potência", v: res?.N_kw?.toFixed(1) || "—", u: "kW", c: palette.copper },
+          { l: "P/motor", v: res?.N_per_kw?.toFixed(1) || "—", u: "kW", c: palette.copper },
+          { l: "Redução", v: res?.i_red?.toFixed(1) || "—", u: ":1", c: palette.text },
+          { l: "Au real", v: res?.fa?.Au?.toFixed(3) || "—", u: "m²", c: palette.text },
+        ].map((m, i) => (
+          <div key={i} style={{
+            background: palette.bg1, border: `1px solid ${palette.border}`, borderLeft: `3px solid ${m.c}`,
+            borderRadius: 6, padding: "8px 10px",
+          }}>
+            <div style={{ color: palette.muted, fontSize: 9, fontWeight: 600, textTransform: "uppercase" }}>{m.l}</div>
+            <div style={{ color: m.c, fontSize: 16, fontWeight: 700, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
+            <div style={{ color: palette.muted, fontSize: 9 }}>{m.u}</div>
+          </div>
+        ))}
+      </div>
 
-              <h4 className="tmw-section-h">Correia e Roletes</h4>
-              <NumInp label="Peso correia (Wb)" val={inp.Wb} k="Wb" unit="kgf/m" step={0.5} />
-              <NumInp label="Nº lonas" val={inp.n_lonas} k="n_lonas" step={1} />
-              <NumInp label="Capacidade tensão" val={inp.cap_tens} k="cap_tens" unit="N/m" step={1000} />
-              <SelInp label="Classe rolete" val={inp.idler_cl} k="idler_cl" opts={Object.entries(IDLERS).map(([k, v]: any) => ({ v: k, l: v.l }))} />
-              <NumInp label="Peso rol. carga" val={inp.p_rol_carga} k="p_rol_carga" unit="kgf" step={1} />
-              <NumInp label="Nº limpadores" val={inp.n_limp} k="n_limp" step={1} />
-              <NumInp label="Cs (atrito)" val={inp.Cs} k="Cs" step={0.001} />
-              <NumInp label="Ft (flexão)" val={inp.Ft_flex} k="Ft_flex" unit="kgf" step={1} />
+      {/* CONTENT */}
+      <div style={{ padding: 14 }}>
 
-              <h4 className="tmw-section-h">Motor</h4>
-              <NumInp label="Frequência" val={inp.freq_hz} k="freq_hz" unit="Hz" step={1} />
-              <NumInp label="Nº polos" val={inp.n_polos} k="n_polos" step={2} />
-              <NumInp label="η correia" val={inp.ef_c} k="ef_c" step={0.01} />
-              <NumInp label="η redutor" val={inp.ef_r} k="ef_r" step={0.01} />
-              <NumInp label="η acoplam." val={inp.ef_a} k="ef_a" step={0.01} />
+        {/* === MATERIAL === */}
+        {tab === 0 && (
+          <div style={card}>
+            <div style={cardTitle}>Material Transportado</div>
+            <div style={grid(4)}>
+              <Sel label="Material" val={inp.mat_key} set={(v: any) => s("mat_key", v)}
+                opts={Object.keys(MATERIAL_DB).map(k => ({ v: k, l: MATERIAL_DB[k].name }))}/>
+              <F label="Densidade" val={inp.mat_d} set={(v: any) => s("mat_d", v)} unit="kg/m³"/>
+              <F label="Capacidade" val={inp.cap_th} set={(v: any) => s("cap_th", v)} unit="t/h"/>
+              <F label="Surcharge angle Φs" val={inp.phi_s} set={(v: any) => s("phi_s", v)} unit="°"/>
+              <F label="Ângulo máx. transp." val={inp.phi_max_mat} set={(v: any) => s("phi_max_mat", v)} unit="°"/>
             </div>
-          </section>
-        </div>
+            <div style={{ marginTop: 14, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 11, color: palette.muted }}>
+              <strong style={{ color: palette.copper }}>Φs (surcharge):</strong> ângulo formado pelo material em movimento sobre a correia.
+              Determina a área do "cap" superior na seção. Tipicamente 5°-10° abaixo do ângulo de repouso.
+              <br/>
+              <strong style={{ color: palette.copper }}>Φ máx:</strong> inclinação máxima na qual o material não escorrega.
+              CEMA recomenda margem de 2°-5° abaixo deste valor.
+            </div>
+          </div>
+        )}
 
-        {/* COLUNA DIREITA */}
-        <div>
-          {/* MÉTRICAS */}
-          <section className="tmw-metrics">
-            <div className="tmw-metric primary">
-              <div className="tmw-metric-label">Potência Motor</div>
-              <div className="tmw-metric-val">{res ? fmt(res.N_hp, 1) : "–"}</div>
-              <div className="tmw-metric-sub">HP · {res ? fmt(res.N_kw, 1) : "–"} kW</div>
+        {/* === GEOMETRIA === */}
+        {tab === 1 && (
+          <div style={card}>
+            <div style={cardTitle}>Perfil Geométrico (Multi-Trecho)</div>
+            <div style={{ marginBottom: 12, color: palette.muted, fontSize: 11 }}>
+              Defina até 4 trechos consecutivos com comprimentos e ângulos diferentes.
+              Ângulos positivos = subida, negativos = descida. Mudanças de inclinação criam curvas (côncava ou convexa).
             </div>
-            <div className="tmw-metric">
-              <div className="tmw-metric-label">Tensão Efetiva</div>
-              <div className="tmw-metric-val">{res ? fmt(res.Te, 0) : "–"}</div>
-              <div className="tmw-metric-sub">kgf · força motriz</div>
-            </div>
-            <div className="tmw-metric">
-              <div className="tmw-metric-label">Tensão T1</div>
-              <div className="tmw-metric-val" style={{ color: res?.tension_ok ? PAL.ok : PAL.bad }}>{res ? fmt(res.T1, 0) : "–"}</div>
-              <div className="tmw-metric-sub">kgf · de {res ? fmt(res.Tad, 0) : "–"} adm.</div>
-            </div>
-            <div className="tmw-metric">
-              <div className="tmw-metric-label">Capacidade Real</div>
-              <div className="tmw-metric-val" style={{ color: res?.cap_ok ? PAL.ok : PAL.bad }}>{res ? fmt(res.cap_real, 0) : "–"}</div>
-              <div className="tmw-metric-sub">t/h · req. {inp.cap_th} t/h</div>
-            </div>
-            <div className="tmw-metric">
-              <div className="tmw-metric-label">Velocidade</div>
-              <div className="tmw-metric-val">{res ? fmt(res.V, 2) : "–"}</div>
-              <div className="tmw-metric-sub">m/s · utilizada</div>
-            </div>
-            <div className="tmw-metric">
-              <div className="tmw-metric-label">Redução</div>
-              <div className="tmw-metric-val">{res ? fmt(res.red, 1) : "–"}</div>
-              <div className="tmw-metric-sub">:1 · {res ? fmt(res.n_mot, 0) : "–"}→{res ? fmt(res.n_tamb, 1) : "–"} rpm</div>
-            </div>
-            <div className="tmw-metric">
-              <div className="tmw-metric-label">Contrapeso</div>
-              <div className="tmw-metric-val">{res ? fmt(res.contrapeso, 0) : "–"}</div>
-              <div className="tmw-metric-sub">kgf · = 2 × T2</div>
-            </div>
-            <div className="tmw-metric">
-              <div className="tmw-metric-label">Pot./acionamento</div>
-              <div className="tmw-metric-val">{res ? fmt(res.N_per, 1) : "–"}</div>
-              <div className="tmw-metric-sub">HP · de {inp.n_ac} acion.</div>
-            </div>
-          </section>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${palette.border}` }}>
+                  <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Trecho</th>
+                  <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Comprimento (m)</th>
+                  <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Ângulo (°)</th>
+                  <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Tipo</th>
+                  <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {inp.segments.map((seg: any, i: number) => {
+                  const next = inp.segments[i + 1];
+                  const tipo = !next ? "—" : (next.ang > seg.ang ? "côncava" : next.ang < seg.ang ? "convexa" : "reta");
+                  return (
+                    <tr key={i} style={{ borderBottom: `1px solid ${palette.border}` }}>
+                      <td style={{ padding: 8, color: palette.copper, fontWeight: 700 }}>{i + 1}</td>
+                      <td style={{ padding: 8 }}>
+                        <input type="number" value={seg.comp} step={1}
+                          onChange={(e: any) => {
+                            const v = +e.target.value;
+                            setI(p => ({ ...p, segments: p.segments.map((s: any, j: number) => j === i ? { ...s, comp: v } : s) }));
+                          }}
+                          style={{ ...inputSty, width: 100 }}/>
+                      </td>
+                      <td style={{ padding: 8 }}>
+                        <input type="number" value={seg.ang} step={0.5}
+                          onChange={(e: any) => {
+                            const v = +e.target.value;
+                            setI(p => ({ ...p, segments: p.segments.map((s: any, j: number) => j === i ? { ...s, ang: v } : s) }));
+                          }}
+                          style={{ ...inputSty, width: 100 }}/>
+                      </td>
+                      <td style={{ padding: 8, color: palette.muted, fontSize: 11 }}>{tipo}</td>
+                      <td style={{ padding: 8 }}>
+                        {inp.segments.length > 1 && (
+                          <button onClick={() => setI(p => ({ ...p, segments: p.segments.filter((_: any, j: number) => j !== i) }))}
+                            style={{ background: palette.bad, color: "#fff", border: "none", borderRadius: 4, padding: "4px 10px", cursor: "pointer", fontSize: 10, fontFamily: "inherit" }}>
+                            Remover
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {inp.segments.length < 4 && (
+              <button onClick={() => setI(p => ({ ...p, segments: [...p.segments, { comp: 10, ang: 0 }] }))}
+                style={{
+                  marginTop: 12, background: palette.primary, color: "#fff", border: "none",
+                  borderRadius: 5, padding: "8px 14px", fontSize: 11, fontWeight: 600,
+                  cursor: "pointer", fontFamily: "inherit",
+                }}>
+                + Adicionar Trecho
+              </button>
+            )}
 
-          {/* VIZ GRID */}
-          <section className="tmw-viz">
-            <div className="tmw-panel">
-              <div className="tmw-panel-title">
-                <div>
-                  <h3>Esquemático 2D — Vista Lateral</h3>
-                  <p>Layout do transportador, tambores, roletes e material</p>
-                </div>
-                <span className="tmw-badge info">visual</span>
-              </div>
-              <div style={{ padding: 12, background: PAL.bg, height: 290 }}>
-                <Schematic2D inp={inp} />
-              </div>
-            </div>
-            <div className="tmw-panel">
-              <div className="tmw-panel-title">
-                <div>
-                  <h3>Seção Transversal</h3>
-                  <p>Vista frontal · 3 roletes em V</p>
-                </div>
-                <span className="tmw-badge info">cross-section</span>
-              </div>
-              <div style={{ padding: 12, background: PAL.bg, height: 290 }}>
-                <CrossSection inp={inp} />
-              </div>
-            </div>
-          </section>
-
-          {/* 3D */}
-          <section className="tmw-panel" style={{ marginBottom: 16 }}>
-            <div className="tmw-panel-title">
-              <div>
-                <h3>Modelo 3D Interativo</h3>
-                <p>Orbite, faça pan e zoom no transportador completo</p>
-              </div>
-              <span className="tmw-badge info">three.js</span>
-            </div>
-            <Viewer3D inp={inp} />
-          </section>
-
-          {/* GRÁFICOS */}
-          <section className="tmw-bottom">
-            <div className="tmw-panel">
-              <div className="tmw-panel-title">
-                <div>
-                  <h3>Perfil de Tensão</h3>
-                  <p>T_ida, T_volta e tensão admissível</p>
-                </div>
-                <span className="tmw-badge info">curve</span>
-              </div>
-              <div style={{ padding: 12 }}>
-                {res ? (
-                  <ResponsiveContainer width="100%" height={240}>
-                    <AreaChart data={res.curve} margin={{ top: 8, right: 16, left: 6, bottom: 22 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={PAL.border} />
-                      <XAxis dataKey="pos" label={{ value: "Posição (m)", position: "bottom", fill: PAL.muted, fontSize: 10 }} tick={{ fill: PAL.muted, fontSize: 9 }} stroke={PAL.border} />
-                      <YAxis label={{ value: "kgf", angle: -90, position: "insideLeft", fill: PAL.muted, fontSize: 10 }} tick={{ fill: PAL.muted, fontSize: 9 }} stroke={PAL.border} />
-                      <Tooltip contentStyle={{ background: PAL.panel, border: `1px solid ${PAL.border}`, borderRadius: 8, fontSize: 11 }} />
-                      <Legend wrapperStyle={{ fontSize: 10 }} />
-                      <Area type="monotone" dataKey="T_ida" name="T ida" stroke={PAL.accent} fill={PAL.accent} fillOpacity={0.18} strokeWidth={2.2} />
-                      <Area type="monotone" dataKey="T_volta" name="T retorno" stroke={PAL.primary} fill={PAL.primary} fillOpacity={0.12} strokeWidth={1.8} />
-                      <ReferenceLine y={res.Tad} stroke={PAL.bad} strokeDasharray="5 3" label={{ value: `Tad=${res.Tad.toFixed(0)}`, fill: PAL.bad, fontSize: 9 }} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                ) : <div style={{ height: 240, display: "grid", placeItems: "center", color: PAL.muted }}>Aguardando cálculo</div>}
-              </div>
-            </div>
-            <div className="tmw-panel">
-              <div className="tmw-panel-title">
-                <div>
-                  <h3>Decomposição de Forças</h3>
-                  <p>Componentes resistivas e tensão efetiva</p>
-                </div>
-                <span className="tmw-badge info">forças</span>
-              </div>
-              <div style={{ padding: 12 }}>
-                {res ? (
-                  <ResponsiveContainer width="100%" height={240}>
-                    <BarChart data={forceData} margin={{ top: 8, right: 16, left: 6, bottom: 8 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={PAL.border} />
-                      <XAxis dataKey="n" tick={{ fill: PAL.muted, fontSize: 10 }} stroke={PAL.border} />
-                      <YAxis tick={{ fill: PAL.muted, fontSize: 9 }} stroke={PAL.border} />
-                      <Tooltip contentStyle={{ background: PAL.panel, border: `1px solid ${PAL.border}`, borderRadius: 8, fontSize: 11 }}
-                        formatter={(v: any, _n: any, p: any) => [`${v} kgf`, p.payload.full]} />
-                      <Bar dataKey="v" radius={[6, 6, 0, 0]}>
-                        {forceData.map((d, i) => <Cell key={i} fill={d.fill} />)}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : <div style={{ height: 240, display: "grid", placeItems: "center", color: PAL.muted }}>Aguardando cálculo</div>}
-              </div>
-            </div>
-          </section>
-
-          {/* TABELA + EQUAÇÕES */}
-          <section className="tmw-bottom">
-            <div className="tmw-panel">
-              <div className="tmw-panel-title">
-                <div>
-                  <h3>Saídas e Verificações</h3>
-                  <p>Resultados completos do cálculo CEMA</p>
+            {res && (
+              <div style={{ marginTop: 16, padding: 12, background: palette.bg0, borderRadius: 6 }}>
+                <div style={lbl}>Resumo Geométrico</div>
+                <div style={{ ...grid(4), marginTop: 8 }}>
+                  <div><span style={{ color: palette.muted, fontSize: 10 }}>L total: </span><strong style={{ color: palette.text }}>{res.L_total.toFixed(1)} m</strong></div>
+                  <div><span style={{ color: palette.muted, fontSize: 10 }}>L horizontal: </span><strong style={{ color: palette.text }}>{res.L_h.toFixed(1)} m</strong></div>
+                  <div><span style={{ color: palette.muted, fontSize: 10 }}>H total: </span><strong style={{ color: palette.text }}>{res.H_total.toFixed(2)} m</strong></div>
+                  <div><span style={{ color: palette.muted, fontSize: 10 }}>β eq: </span><strong style={{ color: palette.copper }}>{res.beta_eq.toFixed(2)}°</strong></div>
+                  <div><span style={{ color: palette.muted, fontSize: 10 }}>R mín. convexa: </span><strong style={{ color: palette.text }}>{res.radii.R_convex.toFixed(0)} m</strong></div>
+                  <div><span style={{ color: palette.muted, fontSize: 10 }}>R mín. côncava: </span><strong style={{ color: palette.text }}>{res.radii.R_concave.toFixed(0)} m</strong></div>
                 </div>
               </div>
-              <div className="tmw-panel-inner">
-                {res ? (
-                  <>
-                    <table className="tmw-table">
-                      <tbody>
-                        {[
-                          ["Velocidade utilizada (V)", `${fmt(res.V, 3)} m/s`, res.V === inp.vel_ms ? "projeto" : "ajustada"],
-                          ["Peso material (Wm)", `${fmt(res.Wm, 2)} kgf/m`, ""],
-                          ["Fator Ky", fmt(res.Ky, 4), "interp. CEMA Tab. 6-2"],
-                          ["Fator Kx", fmt(res.Kx, 4), "rolete + correia"],
-                          ["Resistência total (Ta)", `${fmt(res.Ta, 0)} kgf`, ""],
-                          ["Tensão efetiva (Te)", `${fmt(res.Te, 0)} kgf`, "Ta + Ft + Wm·H"],
-                          ["Pot. efetiva (Ne)", `${fmt(res.Ne_hp, 2)} HP`, ""],
-                          ["Pot. motor total", `${fmt(res.N_hp, 1)} HP`, `${fmt(res.N_kw, 1)} kW`],
-                          ["Pot. por acionamento", `${fmt(res.N_per, 1)} HP`, `${inp.n_ac} acion.`],
-                          ["Wrap factor (Cw)", fmt(res.Cw, 3), `${inp.ang_abr}° abraç.`],
-                          ["T1 (lado tenso)", `${fmt(res.T1, 0)} kgf`, res.tension_ok ? "OK" : "EXCEDE Tad"],
-                          ["T2 (lado frouxo)", `${fmt(res.T2, 0)} kgf`, ""],
-                          ["Tensão admissível (Tad)", `${fmt(res.Tad, 0)} kgf`, "da correia"],
-                          ["T sag (catenária)", `${fmt(res.T_sag, 0)} kgf`, "espaç. roletes"],
-                          ["Contrapeso", `${fmt(res.contrapeso, 0)} kgf`, "= 2·T2"],
-                          ["Capacidade real", `${fmt(res.cap_real, 0)} t/h`, res.cap_ok ? "atende" : "INSUFICIENTE"],
-                          ["Rotação motor", `${fmt(res.n_mot, 0)} rpm`, `${inp.n_polos} polos · ${inp.freq_hz} Hz`],
-                          ["Rotação tambor", `${fmt(res.n_tamb, 1)} rpm`, ""],
-                          ["Relação redução", `${fmt(res.red, 2)}:1`, ""],
-                        ].map((row, i) => (
-                          <tr key={i}>
-                            <td>{row[0]}</td>
-                            <td className="tmw-mono" style={{ fontWeight: 600 }}>{row[1]}</td>
-                            <td style={{ color: PAL.muted, fontSize: 11 }}>{row[2]}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    <div className="tmw-warn-list">
-                      {res.warnings.map((w: any, i: number) => (
-                        <div key={i} className={`tmw-warn-item ${w.level}`}>{w.text}</div>
-                      ))}
-                    </div>
-                  </>
-                ) : <p style={{ color: PAL.muted, textAlign: "center", padding: 20 }}>Execute o cálculo</p>}
+            )}
+          </div>
+        )}
+
+        {/* === CORREIA / ROLETES === */}
+        {tab === 2 && (
+          <>
+            <div style={card}>
+              <div style={cardTitle}>Correia</div>
+              <div style={grid(4)}>
+                <Sel label="Largura" val={inp.larg_pol} set={(v: any) => s("larg_pol", +v)}
+                  opts={BW_OPTIONS.map(b => ({ v: b, l: `${b}" (${(b * 25.4).toFixed(0)} mm)` }))}/>
+                <F label="Velocidade" val={inp.vel_ms} set={(v: any) => s("vel_ms", v)} unit="m/s" step={0.1}/>
+                <F label="Peso correia (Wb)" val={inp.Wb} set={(v: any) => s("Wb", v)} unit="kgf/m" step={0.1}/>
+                <F label="Ângulo rolete (λ)" val={inp.ang_rol} set={(v: any) => s("ang_rol", v)} unit="°"/>
+                <F label="Nº de lonas" val={inp.n_lonas} set={(v: any) => s("n_lonas", v)}/>
+                <F label="Resist. lonas" val={inp.cap_tens} set={(v: any) => s("cap_tens", v)} unit="N/m" step={100}/>
               </div>
             </div>
-
-            <div className="tmw-panel">
-              <div className="tmw-panel-title">
-                <div>
-                  <h3>Base de Cálculo — CEMA 7th Ed.</h3>
-                  <p>Equações principais do método</p>
-                </div>
+            <div style={card}>
+              <div style={cardTitle}>Roletes</div>
+              <div style={grid(4)}>
+                <Sel label="Classe CEMA" val={inp.idler_cl} set={(v: any) => s("idler_cl", v)}
+                  opts={Object.keys(IDLER_CLASS).map(k => ({ v: k, l: IDLER_CLASS[k].l }))}/>
+                <F label="Espaç. carga (Si)" val={inp.esp_rol} set={(v: any) => s("esp_rol", v)} unit="m" step={0.1}/>
+                <F label="Espaç. retorno" val={inp.esp_rol_ret} set={(v: any) => s("esp_rol_ret", v)} unit="m" step={0.1}/>
+                <F label="Peso rolete carga" val={inp.p_rol_carga} set={(v: any) => s("p_rol_carga", v)} unit="kgf"/>
+                <F label="Peso rolete retorno" val={inp.p_rol_ret} set={(v: any) => s("p_rol_ret", v)} unit="kgf"/>
               </div>
-              <div className="tmw-panel-inner">
-                <div className="tmw-basis">
-                  <div className="tmw-basis-box">
-                    <h4>Capacidade e Velocidade</h4>
-                    <div className="tmw-eq"><div className="lhs">V mínima</div><div className="rhs">cap_th / (ρ · cap_vol)</div></div>
-                    <div className="tmw-eq"><div className="lhs">Wm</div><div className="rhs">cap_th · 1000 / (3600 · V)</div></div>
-                    <div className="tmw-eq"><div className="lhs">cap_real</div><div className="rhs">cap_vol · V · ρ / 1000</div></div>
+            </div>
+            <div style={card}>
+              <div style={cardTitle}>Seção Transversal — Área de Enchimento</div>
+              <CrossSection inp={inp} res={res} palette={palette}/>
+            </div>
+          </>
+        )}
+
+        {/* === TAMBORES === */}
+        {tab === 3 && (
+          <>
+            <div style={card}>
+              <div style={cardTitle}>Tambor Motor (Cabeça)</div>
+              <div style={grid(4)}>
+                <F label="Diâmetro" val={inp.d_tamb_mm} set={(v: any) => s("d_tamb_mm", v)} unit="mm"/>
+                <F label="Ângulo abraçamento" val={inp.ang_abr} set={(v: any) => s("ang_abr", v)} unit="°"/>
+                <F label="μ (atrito lagging)" val={inp.mu_lag} set={(v: any) => s("mu_lag", v)} step={0.05}/>
+              </div>
+            </div>
+            <div style={card}>
+              <div style={cardTitle}>Tambores no Sistema (Posicionáveis)</div>
+              <div style={{ color: palette.muted, fontSize: 11, marginBottom: 12 }}>
+                Configure cada tambor: tipo, posição (m), e lado (carga/retorno). Você também pode arrastar visualmente na aba "2D Interativo".
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${palette.border}` }}>
+                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Nome</th>
+                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Tipo</th>
+                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Posição (m)</th>
+                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Lado</th>
+                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pulleys.map((p, i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${palette.border}` }}>
+                      <td style={{ padding: 6 }}>
+                        <input value={p.name} onChange={(e: any) => setPulleys(prev => prev.map((q, j) => j === i ? { ...q, name: e.target.value } : q))}
+                          style={{ ...inputSty, width: 220 }}/>
+                      </td>
+                      <td style={{ padding: 6 }}>
+                        <select value={p.type} onChange={(e: any) => setPulleys(prev => prev.map((q, j) => j === i ? { ...q, type: e.target.value } : q))}
+                          style={{ ...inputSty, width: 120 }}>
+                          <option value="drive">Motor</option>
+                          <option value="tail">Cauda</option>
+                          <option value="takeup">Tensionamento</option>
+                          <option value="snub">Snub (desvio)</option>
+                          <option value="bend">Bend (retorno)</option>
+                        </select>
+                      </td>
+                      <td style={{ padding: 6 }}>
+                        <input type="number" value={p.x.toFixed(2)} step={0.5}
+                          onChange={(e: any) => setPulleys(prev => prev.map((q, j) => j === i ? { ...q, x: +e.target.value } : q))}
+                          style={{ ...inputSty, width: 90 }}/>
+                      </td>
+                      <td style={{ padding: 6 }}>
+                        <select value={p.side} onChange={(e: any) => setPulleys(prev => prev.map((q, j) => j === i ? { ...q, side: e.target.value } : q))}
+                          style={{ ...inputSty, width: 100 }}>
+                          <option value="top">Carga</option>
+                          <option value="bot">Retorno</option>
+                        </select>
+                      </td>
+                      <td style={{ padding: 6 }}>
+                        <button onClick={() => setPulleys(prev => prev.filter((_, j) => j !== i))}
+                          style={{ background: palette.bad, color: "#fff", border: "none", borderRadius: 4, padding: "4px 10px", cursor: "pointer", fontSize: 10, fontFamily: "inherit" }}>
+                          Remover
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <button onClick={() => setPulleys(prev => [...prev, { name: "Novo tambor", label: `${prev.length + 1}`, type: "bend", x: 5, side: "bot" }])}
+                style={{
+                  marginTop: 12, background: palette.primary, color: "#fff", border: "none",
+                  borderRadius: 5, padding: "8px 14px", fontSize: 11, fontWeight: 600,
+                  cursor: "pointer", fontFamily: "inherit",
+                }}>
+                + Adicionar Tambor
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* === TENSIONAMENTO === */}
+        {tab === 4 && (
+          <>
+            <div style={card}>
+              <div style={cardTitle}>Tipo de Tensionamento</div>
+              <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+                {[
+                  { v: "gravity", l: "Gravidade (Contrapeso)", desc: "Torre vertical com contrapeso. Mantém T2 constante." },
+                  { v: "screw", l: "Parafuso (Screw take-up)", desc: "Ajuste manual via parafuso. Sem absorção dinâmica." },
+                  { v: "automatic", l: "Automático (Winch/Hidráulico)", desc: "Atuador motorizado. Resposta dinâmica controlada." },
+                ].map(opt => (
+                  <button key={opt.v} onClick={() => s("tens_type", opt.v)} style={{
+                    flex: 1, background: inp.tens_type === opt.v ? palette.primary : palette.bg0,
+                    color: inp.tens_type === opt.v ? "#fff" : palette.text,
+                    border: `1px solid ${inp.tens_type === opt.v ? palette.primary : palette.border}`,
+                    borderRadius: 6, padding: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+                  }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>{opt.l}</div>
+                    <div style={{ fontSize: 10, opacity: 0.8 }}>{opt.desc}</div>
+                  </button>
+                ))}
+              </div>
+
+              {res && (
+                <div style={{ padding: 14, background: palette.bg0, borderRadius: 6 }}>
+                  {inp.tens_type === "gravity" && (
+                    <>
+                      <div style={lbl}>Peso do Contrapeso Necessário</div>
+                      <div style={{ fontSize: 26, fontWeight: 700, color: palette.copper, marginTop: 4 }}>
+                        {res.Wcp.toFixed(0)} <span style={{ fontSize: 14, color: palette.muted }}>kgf</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: palette.muted, marginTop: 8 }}>
+                        Wcp = 2 × T2 = 2 × {res.T2.toFixed(0)} kgf<br/>
+                        Curso recomendado: {(res.L_total * 0.015).toFixed(2)} m (1.5% do comprimento)
+                      </div>
+                    </>
+                  )}
+                  {inp.tens_type === "screw" && (
+                    <>
+                      <div style={lbl}>Curso do Parafuso de Ajuste</div>
+                      <div style={{ fontSize: 26, fontWeight: 700, color: palette.copper, marginTop: 4 }}>
+                        {res.screw_travel.toFixed(0)} <span style={{ fontSize: 14, color: palette.muted }}>mm</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: palette.muted, marginTop: 8 }}>
+                        Curso = L × 1.5% (elongação típica de correias têxteis)<br/>
+                        ⚠️ Não absorve variações dinâmicas — adequado apenas para L &lt; 60m.
+                      </div>
+                    </>
+                  )}
+                  {inp.tens_type === "automatic" && (
+                    <>
+                      <div style={lbl}>Força Aplicada pelo Atuador</div>
+                      <div style={{ fontSize: 26, fontWeight: 700, color: palette.copper, marginTop: 4 }}>
+                        {res.auto_force.toFixed(0)} <span style={{ fontSize: 14, color: palette.muted }}>kgf</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: palette.muted, marginTop: 8 }}>
+                        F = 2 × T2. Sistema mantém T2 ajustável dinamicamente conforme a carga.
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* === ACIONAMENTO + ACESSÓRIOS === */}
+        {tab === 5 && (
+          <>
+            <div style={card}>
+              <div style={cardTitle}>Motor Elétrico</div>
+              <div style={grid(4)}>
+                <F label="Frequência" val={inp.freq_hz} set={(v: any) => s("freq_hz", v)} unit="Hz"/>
+                <F label="Polos" val={inp.n_polos} set={(v: any) => s("n_polos", v)}/>
+                <F label="Nº acionamentos" val={inp.n_ac} set={(v: any) => s("n_ac", v)}/>
+                <F label="η correias" val={inp.ef_c} set={(v: any) => s("ef_c", v)} step={0.01}/>
+                <F label="η redutor" val={inp.ef_r} set={(v: any) => s("ef_r", v)} step={0.01}/>
+                <F label="η acoplamento" val={inp.ef_a} set={(v: any) => s("ef_a", v)} step={0.01}/>
+              </div>
+            </div>
+            <div style={card}>
+              <div style={cardTitle}>Acessórios (Resistências Adicionais)</div>
+              <div style={grid(4)}>
+                <F label="Nº limpadores" val={inp.n_limp} set={(v: any) => s("n_limp", v)}/>
+                <F label="Comp. guias" val={inp.comp_guias} set={(v: any) => s("comp_guias", v)} unit="m"/>
+                <F label="Coef. skirt (Cs)" val={inp.Cs} set={(v: any) => s("Cs", v)} step={0.001}/>
+                <F label="Nº plows" val={inp.n_plows} set={(v: any) => s("n_plows", v)}/>
+                <F label="F por plow" val={inp.F_plow} set={(v: any) => s("F_plow", v)} unit="kgf"/>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* === RESULTADOS === */}
+        {tab === 6 && res && (
+          <>
+            <div style={card}>
+              <div style={cardTitle}>Resistências CEMA — Decomposição</div>
+              <ResistanceBars res={res} palette={palette}/>
+            </div>
+            <div style={card}>
+              <div style={cardTitle}>Perfil de Tensão</div>
+              <TensionChart res={res} palette={palette}/>
+            </div>
+            <div style={card}>
+              <div style={cardTitle}>Tabela Completa de Saídas</div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <tbody>
+                  {[
+                    ["Velocidade real (V)", res.V.toFixed(3), "m/s"],
+                    ["Velocidade mínima exigida", res.V_min?.toFixed(3) || "—", "m/s"],
+                    ["Capacidade real", res.cap_real.toFixed(0), "t/h"],
+                    ["Peso do material por metro (Wm)", res.Wm.toFixed(2), "kgf/m"],
+                    ["Área de enchimento real (Au)", res.fa.Au.toFixed(4), "m²"],
+                    ["Au referência CEMA", res.fa_ref.Au.toFixed(4), "m²"],
+                    ["Fator de utilização (Ku)", res.Ku.toFixed(3), "-"],
+                    ["Largura útil (b)", (res.fa.b_util * 1000).toFixed(0), "mm"],
+                    ["Coeficiente Ky (flexão correia)", res.Ky.toFixed(4), "-"],
+                    ["Coeficiente Kx (flexão idlers)", res.Kx.toFixed(4), "-"],
+                    ["Te (tensão efetiva)", res.Te.toFixed(0), "kgf"],
+                    ["T1 (lado tenso)", res.T1.toFixed(0), "kgf"],
+                    ["T2 (lado frouxo)", res.T2.toFixed(0), "kgf"],
+                    ["Tad (admissível)", res.Tad.toFixed(0), "kgf"],
+                    ["T sag (mín.)", res.T_sag.toFixed(0), "kgf"],
+                    ["Cw (Euler)", res.Cw.toFixed(3), "-"],
+                    ["Potência total", res.N_kw.toFixed(2), "kW"],
+                    ["Potência por motor", res.N_per_kw.toFixed(2), "kW"],
+                    ["Rotação tambor motor", res.n_tamb.toFixed(2), "rpm"],
+                    ["Relação de redução", res.i_red.toFixed(2), ":1"],
+                    ["Raio mín. convexa", res.radii.R_convex.toFixed(0), "m"],
+                    ["Raio mín. côncava", res.radii.R_concave.toFixed(0), "m"],
+                  ].map(([l, v, u], i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${palette.border}` }}>
+                      <td style={{ padding: "7px 8px", color: palette.muted }}>{l}</td>
+                      <td style={{ padding: "7px 8px", color: palette.text, textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{v}</td>
+                      <td style={{ padding: "7px 8px", color: palette.copper, fontSize: 10, width: 60 }}>{u}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {/* === 2D INTERATIVO === */}
+        {tab === 7 && (
+          <div style={card}>
+            <div style={cardTitle}>Vista Lateral 2D — Editor Interativo</div>
+            <InteractiveProfile2D inp={inp} res={res} palette={palette} pulleys={pulleys} setPulleys={setPulleys}/>
+          </div>
+        )}
+
+        {/* === 3D === */}
+        {tab === 8 && (
+          <div style={card}>
+            <div style={cardTitle}>Visualização 3D — Three.js</div>
+            <ThreeViewer3D inp={inp} res={res} pulleys={pulleys} palette={palette}/>
+            <div style={{ marginTop: 10, fontSize: 10, color: palette.muted }}>
+              Use o mouse para orbitar, zoom (scroll) e pan (botão direito). A correia é renderizada por trechos respeitando os ângulos definidos em "Geometria".
+            </div>
+          </div>
+        )}
+
+        {/* === EQUAÇÕES === */}
+        {tab === 9 && (
+          <>
+            <div style={card}>
+              <div style={cardTitle}>Equações Principais — CEMA 7th Edition</div>
+              <div style={{ display: "grid", gap: 14 }}>
+                {[
+                  { t: "Tensão Efetiva", f: "Te = Tx + Ty + Tyr + Tm + Tb + Tsb + Tbc + Tpl + Tam", d: "Soma vetorial de todas as resistências ao movimento da correia carregada." },
+                  { t: "Flexão dos roletes (Tx)", f: "Tx = Kx · L", d: "Kx = 0.00068·(Wb + Wm) + A1/Si  — onde A1 é a constante CEMA da classe do rolete." },
+                  { t: "Flexão da correia (Ty)", f: "Ty = Ky · L · (Wb + Wm)", d: "Ky depende do comprimento total (interpolação CEMA Tab 6.1)." },
+                  { t: "Elevação do material (Tm)", f: "Tm = H · Wm", d: "H = elevação total acumulada de todos os trechos." },
+                  { t: "Tensão T1 (Euler)", f: "T1 = Te · Cw / (Cw − 1),   Cw = e^(μ·θ)", d: "θ em radianos. μ ≈ 0.35 com lagging, 0.25 sem lagging." },
+                  { t: "Tensão admissível", f: "Tad = (σ_lonas · B) / g", d: "σ_lonas em N/m, B em metros, resultado em kgf." },
+                  { t: "Tensão de sag mínima", f: "T_sag = Si · (Wb + Wm) / (8 · sag_max)", d: "sag_max ≤ 2% do espaçamento dos roletes." },
+                  { t: "Potência total", f: "P = (Te · g · V) / (η · 1000)", d: "Resultado em kW. η = ηcorreias · ηredutor · ηacoplamento." },
+                  { t: "Área de enchimento", f: "Au = A_trapézio + A_cap", d: "A_trapézio = f(λ, b);  A_cap = (bs/2)² · tan(Φs)" },
+                  { t: "Raio mínimo convexa", f: "Rmin = T1 / (Wb · cos β)", d: "Evita que a correia descole do tambor em uma curva convexa." },
+                  { t: "Raio mínimo côncava", f: "Rmin = 1.5 · T1 / (Wb · cos β)", d: "Evita levantamento da correia em curvas côncavas (mais crítico)." },
+                ].map((eq, i) => (
+                  <div key={i} style={{ padding: 12, background: palette.bg0, borderRadius: 6, borderLeft: `3px solid ${palette.copper}` }}>
+                    <div style={{ color: palette.copper, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>{eq.t}</div>
+                    <div style={{ fontFamily: '"Cambria Math", "Times New Roman", serif', fontSize: 16, color: palette.text, margin: "8px 0", fontStyle: "italic" }}>{eq.f}</div>
+                    <div style={{ fontSize: 11, color: palette.muted }}>{eq.d}</div>
                   </div>
-
-                  <div className="tmw-basis-box">
-                    <h4>Forças Resistivas (Cap. 6)</h4>
-                    <div className="tmw-eq"><div className="lhs">Ky</div><div className="rhs">interp(L) · Tab. 6-2</div></div>
-                    <div className="tmw-eq"><div className="lhs">Kx</div><div className="rhs">0,00068·(Wb+Wm) + Cl</div></div>
-                    <div className="tmw-eq"><div className="lhs">Fg (guias)</div><div className="rhs">Cs · Lg · V² · ρ / 1000</div></div>
-                    <div className="tmw-eq"><div className="lhs">F1 (limpadores)</div><div className="rhs">n · 100,8</div></div>
-                    <div className="tmw-eq"><div className="lhs">Fa (aceleração)</div><div className="rhs">cap_th · V / (3,6 · g)</div></div>
-                    <div className="tmw-eq"><div className="lhs">Ta</div><div className="rhs">Ky·L·(Wm+Wb+Wr/Si) + Kx·L + Fg + F1 + Fa</div></div>
-                  </div>
-
-                  <div className="tmw-basis-box">
-                    <h4>Tensão Efetiva e Potência</h4>
-                    <div className="tmw-eq"><div className="lhs">Te</div><div className="rhs">Ta + Ft + Wm · H</div></div>
-                    <div className="tmw-eq"><div className="lhs">Ne</div><div className="rhs">Te · V / 76 [HP]</div></div>
-                    <div className="tmw-eq"><div className="lhs">N motor</div><div className="rhs">Ne / (η_c · η_r · η_a)</div></div>
-                  </div>
-
-                  <div className="tmw-basis-box">
-                    <h4>Tensões T1 e T2</h4>
-                    <div className="tmw-eq"><div className="lhs">Cw (wrap)</div><div className="rhs">exp(0,35 · θ_rad)</div></div>
-                    <div className="tmw-eq"><div className="lhs">T1</div><div className="rhs">Te · Cw / (Cw − 1)</div></div>
-                    <div className="tmw-eq"><div className="lhs">T2</div><div className="rhs">T1 − Te</div></div>
-                    <div className="tmw-eq"><div className="lhs">Tad</div><div className="rhs">cap_tens · larg_mm / (1000 · g)</div></div>
-                    <div className="tmw-eq"><div className="lhs">Contrapeso</div><div className="rhs">2 · T2</div></div>
-                  </div>
-
-                  <div style={{ fontSize: 10, color: PAL.muted, marginTop: 4, lineHeight: 1.45 }}>
-                    Referência: CEMA — <em>Belt Conveyors for Bulk Materials</em>, 7ª edição. Cap. 6 (forças e tensões), Tab. 6-2 (Ky), Tab. 6-7 (Cs).
-                  </div>
-                </div>
+                ))}
               </div>
             </div>
-          </section>
-        </div>
+          </>
+        )}
+
+        {/* === AVISOS === */}
+        {tab === 10 && (
+          <div style={card}>
+            <div style={cardTitle}>Avisos e Validações</div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {warnings.map((w, i) => {
+                const c = w.level === "ok" ? palette.ok : w.level === "warn" ? palette.warn : palette.bad;
+                const icon = w.level === "ok" ? "✓" : w.level === "warn" ? "⚠" : "✕";
+                return (
+                  <div key={i} style={{
+                    display: "flex", gap: 12, padding: 12, background: palette.bg0,
+                    border: `1px solid ${c}55`, borderLeft: `4px solid ${c}`, borderRadius: 6,
+                  }}>
+                    <div style={{ color: c, fontSize: 18, fontWeight: 800 }}>{icon}</div>
+                    <div style={{ color: palette.text, fontSize: 12, lineHeight: 1.5 }}>{w.text}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );
+}
+
+// ============================================================
+// COMPONENTE PRINCIPAL
+// ============================================================
+export default function TransportadorMod({ onSave, user, UI }: any) {
+  injectCSS();
+  const SavedCalcs = UI?.SavedCalcs;
+
+  const [inp, setI] = useState<CalcInput>({
+    // Material
+    rho: 1600, Q: 1500, phi: 20, theta_rep: 35, d_max: 150, mat_class: "minerio_grosso",
+    // Perfil multi-trecho
+    segments: [
+      { id: 1, L: 80, H: 0 },
+      { id: 2, L: 120, H: 18 },
+      { id: 3, L: 50, H: 0 },
+    ],
+    // Correia
+    B: 1200, lambda: 35, V: 3.0, Wb: 22, Tad: 1000, t_c: 16, FS_c: 6.7, isSteelCord: false,
+    // Roletes
+    Si: 1.2, Sr: 3.0, Wi_carga: 18, Wi_retorno: 14, Kt: 1.0,
+    // Tambor motriz
+    D_tamb: 800, ang_abr: 220, mu_lag: 0.35, lag_type: "lagging",
+    // Take-up
+    tipo_tu: "gravidade", T_tu: 0, h_tu: 5, pos_tu: 0.15,
+    // Limpadores
+    n_limp: 2, F_limp: 80,
+    // Eficiências
+    eta_red: 0.95, eta_acopl: 0.98, eta_motor: 0.92,
+    // Acionamento
+    n_motores: 2, FS_motor: 1.15,
+  });
+
+  const [activeTab, setActiveTab] = useState(0);
+  const res = useMemo(() => calcAll(inp), [inp]);
+
+  const set = (k: keyof CalcInput, v: any) => setI(p => ({ ...p, [k]: v }));
+  const setSeg = (idx: number, field: "L" | "H", v: number) => {
+    setI(p => ({ ...p, segments: p.segments.map((s, i) => i === idx ? { ...s, [field]: v } : s) }));
+  };
+  const addSeg = () => {
+    setI(p => ({ ...p, segments: [...p.segments, { id: Date.now(), L: 50, H: 0 }] }));
+  };
+  const removeSeg = (idx: number) => {
+    if (inp.segments.length <= 1) return;
+    setI(p => ({ ...p, segments: p.segments.filter((_, i) => i !== idx) }));
+  };
+  const handleProfileEdit = (idx: number, dx: number, dy: number) => {
+    setI(p => ({ ...p, segments: p.segments.map((s, i) => i === idx ? { ...s, L: Math.max(dx, 1), H: dy } : s) }));
+  };
+  const handleLoad = (d: any) => { if (d.inp) setI(d.inp); };
+
+  // ---------- Avisos ----------
+  const warnings: { type: "ok" | "warn" | "bad"; msg: string }[] = [];
+  if (res.T1 > res.Tad_admiss) warnings.push({ type: "bad", msg: `T1 (${res.T1.toFixed(0)} kgf) excede tensão admissível da correia (${res.Tad_admiss.toFixed(0)} kgf). Aumentar resistência ou reduzir Te.` });
+  else if (res.T1 > res.Tad_admiss * 0.85) warnings.push({ type: "warn", msg: `T1 está acima de 85% da admissível — margem reduzida.` });
+  else warnings.push({ type: "ok", msg: `T1 dentro do limite admissível (${(res.T1 / res.Tad_admiss * 100).toFixed(0)}% da capacidade).` });
+
+  if (res.fill_pct > 100) warnings.push({ type: "bad", msg: `Capacidade excede o máximo volumétrico (${res.fill_pct.toFixed(0)}% de enchimento). Reduzir Q ou aumentar V/B/λ.` });
+  else if (res.fill_pct > 90) warnings.push({ type: "warn", msg: `Enchimento elevado (${res.fill_pct.toFixed(0)}%) — risco de derramamento.` });
+  else warnings.push({ type: "ok", msg: `Enchimento adequado: ${res.fill_pct.toFixed(0)}% da capacidade volumétrica máxima.` });
+
+  if (inp.V > res.V_max_rec) warnings.push({ type: "warn", msg: `Velocidade ${inp.V} m/s acima da recomendada CEMA Tab. 4-3 (${res.V_max_rec.toFixed(2)} m/s) para essa largura/material.` });
+
+  if (res.beta_max_critico) warnings.push({ type: "bad", msg: `Trecho ${res.beta_max_critico.idx + 1}: inclinação ${res.beta_max_critico.beta.toFixed(1)}° excede máx CEMA Tab. 4-1 (${res.beta_max_critico.beta_max}°) para "${inp.mat_class}".` });
+
+  if (res.L_total < 35) warnings.push({ type: "warn", msg: `Comprimento total < 35m: CEMA não recomendado para muito curtos sem ajuste de fator.` });
+
+  return (<div className="tp-root">
+    {/* HEADER */}
+    <div className="tp-header">
+      <div>
+        <h1>{CONFIG.icon} Transportador de Correia · Belt Analyst</h1>
+        <div className="sub">{CONFIG.norma}</div>
+      </div>
+      <div className="actions">
+        {SavedCalcs && <SavedCalcs user={user} moduleType="transportador" onLoad={handleLoad} />}
+        <button className="tp-btn tp-btn-ghost" onClick={() => onSave?.({ type: "transportador", inp, res })}>💾 Salvar</button>
+        <button className="tp-btn tp-btn-primary">↻ Recalcular</button>
+      </div>
+    </div>
+
+    {/* MÉTRICAS PRINCIPAIS */}
+    <div className="tp-metric-grid">
+      <div className="tp-metric accent">
+        <div className="tp-metric-label">Potência instalada</div>
+        <div className="tp-metric-value">{res.Pm_kW.toFixed(1)}<span className="tp-metric-unit">kW</span></div>
+      </div>
+      <div className="tp-metric">
+        <div className="tp-metric-label">Tensão T1 (motriz)</div>
+        <div className="tp-metric-value">{res.T1.toFixed(0)}<span className="tp-metric-unit">kgf</span></div>
+      </div>
+      <div className="tp-metric">
+        <div className="tp-metric-label">Te (efetiva)</div>
+        <div className="tp-metric-value">{res.Te.toFixed(0)}<span className="tp-metric-unit">kgf</span></div>
+      </div>
+      <div className={"tp-metric " + (res.fill_pct > 100 ? "bad" : res.fill_pct > 90 ? "warn" : "ok")}>
+        <div className="tp-metric-label">Enchimento</div>
+        <div className="tp-metric-value">{res.fill_pct.toFixed(0)}<span className="tp-metric-unit">%</span></div>
+      </div>
+      <div className="tp-metric">
+        <div className="tp-metric-label">Perfil L × H</div>
+        <div className="tp-metric-value">{res.L_total.toFixed(0)}×{res.H_total.toFixed(0)}<span className="tp-metric-unit">m</span></div>
+      </div>
+      <div className="tp-metric">
+        <div className="tp-metric-label">β global</div>
+        <div className="tp-metric-value">{res.beta_global.toFixed(1)}<span className="tp-metric-unit">°</span></div>
+      </div>
+      <div className="tp-metric">
+        <div className="tp-metric-label">Tmax percurso</div>
+        <div className="tp-metric-value">{res.Tmax.toFixed(0)}<span className="tp-metric-unit">kgf</span></div>
+      </div>
+      <div className={"tp-metric " + (res.T1_ok ? "ok" : "bad")}>
+        <div className="tp-metric-label">Capacidade correia</div>
+        <div className="tp-metric-value">{(res.T1 / res.Tad_admiss * 100).toFixed(0)}<span className="tp-metric-unit">%</span></div>
+      </div>
+    </div>
+
+    {/* TABS */}
+    <div className="tp-tabs">
+      {["Entrada", "Perfil 2D", "3D", "Tensões", "Ângulos & Curvas", "Resultados", "Equações"].map((t, i) => (
+        <button key={i} className={"tp-tab " + (activeTab === i ? "active" : "")} onClick={() => setActiveTab(i)}>{t}</button>
+      ))}
+    </div>
+
+    {/* ============== TAB 0: ENTRADA ============== */}
+    {activeTab === 0 && (
+      <div className="tp-grid tp-grid-2">
+        {/* Coluna esquerda: inputs */}
+        <div>
+          <div className="tp-panel">
+            <div className="tp-panel-title">Material</div>
+            <div className="tp-input-row"><label>Tipo de material</label>
+              <select value={inp.mat_class} onChange={e => set("mat_class", e.target.value)}>
+                <option value="carvao">Carvão</option>
+                <option value="minerio_grosso">Minério grosso</option>
+                <option value="minerio_fino">Minério fino</option>
+                <option value="brita">Brita</option>
+                <option value="calcario">Calcário</option>
+                <option value="areia_seca">Areia seca</option>
+                <option value="areia_umida">Areia úmida</option>
+                <option value="graos">Grãos</option>
+                <option value="cimento">Cimento</option>
+                <option value="outros">Outros</option>
+              </select>
+            </div>
+            <div className="tp-input-row"><label>Densidade ρ <span className="unit">kg/m³</span></label>
+              <input type="number" value={inp.rho} onChange={e => set("rho", +e.target.value)} /></div>
+            <div className="tp-input-row"><label>Capacidade Q <span className="unit">t/h</span></label>
+              <input type="number" value={inp.Q} onChange={e => set("Q", +e.target.value)} /></div>
+            <div className="tp-input-row"><label>Surcharge φ <span className="unit">°</span></label>
+              <input type="number" value={inp.phi} onChange={e => set("phi", +e.target.value)} /></div>
+            <div className="tp-input-row"><label>Granulometria d_max <span className="unit">mm</span></label>
+              <input type="number" value={inp.d_max} onChange={e => set("d_max", +e.target.value)} /></div>
+          </div>
+
+          <div className="tp-panel" style={{ marginTop: "12px" }}>
+            <div className="tp-panel-title">Correia</div>
+            <div className="tp-input-row"><label>Largura B <span className="unit">mm</span></label>
+              <input type="number" value={inp.B} onChange={e => set("B", +e.target.value)} /></div>
+            <div className="tp-input-row"><label>Velocidade V <span className="unit">m/s</span></label>
+              <input type="number" step="0.1" value={inp.V} onChange={e => set("V", +e.target.value)} /></div>
+            <div className="tp-input-row"><label>Trough λ <span className="unit">°</span></label>
+              <select value={inp.lambda} onChange={e => set("lambda", +e.target.value)}>
+                <option value={20}>20°</option><option value={35}>35°</option>
+                <option value={45}>45°</option><option value={60}>60°</option>
+              </select>
+            </div>
+            <div className="tp-input-row"><label>Wb (peso linear) <span className="unit">kgf/m</span></label>
+              <input type="number" value={inp.Wb} onChange={e => set("Wb", +e.target.value)} /></div>
+            <div className="tp-input-row"><label>Tensão admissível Tad <span className="unit">N/mm</span></label>
+              <input type="number" value={inp.Tad} onChange={e => set("Tad", +e.target.value)} /></div>
+            <div className="tp-input-row"><label>Tipo de cinta</label>
+              <select value={inp.isSteelCord ? "1" : "0"} onChange={e => set("isSteelCord", e.target.value === "1")}>
+                <option value="0">Têxtil (NN, EP)</option>
+                <option value="1">Steel cord</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Coluna direita: perfil + roletes + take-up */}
+        <div>
+          <div className="tp-panel">
+            <div className="tp-panel-title">Perfil — {inp.segments.length} trecho(s)</div>
+            <div style={{ fontSize: "10px", color: "#54677a", marginBottom: "8px" }}>
+              Defina cada trecho como (L horizontal, H elevação). Valores negativos de H = descida.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "30px 1fr 1fr 50px", gap: "6px", padding: "0 8px", marginBottom: "4px", fontSize: "9px", color: "#54677a", fontWeight: 700, textTransform: "uppercase" }}>
+              <div>#</div><div>L (m)</div><div>H (m)</div><div>β°</div>
+            </div>
+            {inp.segments.map((seg, i) => {
+              const beta = res.segDetails[i]?.beta || 0;
+              return (
+                <div key={seg.id} className="tp-seg-card">
+                  <div className="num">{i + 1}</div>
+                  <input type="number" value={seg.L} onChange={e => setSeg(i, "L", +e.target.value)} />
+                  <input type="number" value={seg.H} onChange={e => setSeg(i, "H", +e.target.value)} />
+                  <button onClick={() => removeSeg(i)} disabled={inp.segments.length <= 1}>×</button>
+                </div>
+              );
+            })}
+            <button className="tp-seg-add" onClick={addSeg}>+ Adicionar trecho</button>
+          </div>
+
+          <div className="tp-panel" style={{ marginTop: "12px" }}>
+            <div className="tp-panel-title">Roletes</div>
+            <div className="tp-grid tp-grid-3">
+              <div className="tp-input-row"><label>Si carga <span className="unit">m</span></label>
+                <input type="number" step="0.1" value={inp.Si} onChange={e => set("Si", +e.target.value)} /></div>
+              <div className="tp-input-row"><label>Sr retorno <span className="unit">m</span></label>
+                <input type="number" step="0.1" value={inp.Sr} onChange={e => set("Sr", +e.target.value)} /></div>
+              <div className="tp-input-row"><label>Kt temp. <span className="unit">-</span></label>
+                <input type="number" step="0.05" value={inp.Kt} onChange={e => set("Kt", +e.target.value)} /></div>
+            </div>
+          </div>
+
+          <div className="tp-panel" style={{ marginTop: "12px" }}>
+            <div className="tp-panel-title">Tambor motriz e take-up</div>
+            <div className="tp-grid tp-grid-3">
+              <div className="tp-input-row"><label>Ø tambor <span className="unit">mm</span></label>
+                <input type="number" value={inp.D_tamb} onChange={e => set("D_tamb", +e.target.value)} /></div>
+              <div className="tp-input-row"><label>Abraçamento <span className="unit">°</span></label>
+                <input type="number" value={inp.ang_abr} onChange={e => set("ang_abr", +e.target.value)} /></div>
+              <div className="tp-input-row"><label>Lagging</label>
+                <select value={inp.lag_type} onChange={e => set("lag_type", e.target.value)}>
+                  <option value="liso">Liso (μ=0.25)</option>
+                  <option value="lagging">Lagging (μ=0.35)</option>
+                  <option value="ceramico">Cerâmico (μ=0.45)</option>
+                </select>
+              </div>
+            </div>
+            <div className="tp-input-row" style={{ marginTop: "8px" }}>
+              <label>Tipo de take-up</label>
+              <div className="tp-radio-group">
+                {(["gravidade", "parafuso", "hidraulico"] as const).map(t => (
+                  <label key={t} className={inp.tipo_tu === t ? "active" : ""}>
+                    <input type="radio" name="tu" checked={inp.tipo_tu === t} onChange={() => set("tipo_tu", t)} />
+                    {t === "gravidade" ? "Gravidade" : t === "parafuso" ? "Parafuso" : "Hidráulico"}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="tp-grid tp-grid-2">
+              <div className="tp-input-row"><label>Posição relativa <span className="unit">0–1</span></label>
+                <input type="number" step="0.05" min="0" max="1" value={inp.pos_tu} onChange={e => set("pos_tu", +e.target.value)} /></div>
+              <div className="tp-input-row"><label>{inp.tipo_tu === "gravidade" ? "Altura h" : "Curso δ"} <span className="unit">m</span></label>
+                <input type="number" step="0.5" value={inp.h_tu} onChange={e => set("h_tu", +e.target.value)} /></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ============== TAB 1: PERFIL 2D ============== */}
+    {activeTab === 1 && (
+      <div className="tp-grid tp-grid-2">
+        <div className="tp-panel">
+          <div className="tp-panel-title">Seção transversal da correia</div>
+          <CrossSection inp={inp} res={res} />
+          <table className="tp-table" style={{ marginTop: "10px" }}>
+            <tbody>
+              <tr><td>bc (largura útil)</td><td>{res.area.bc.toFixed(3)} m</td></tr>
+              <tr><td>Ab (área trough)</td><td>{res.area.Ab.toFixed(4)} m²</td></tr>
+              <tr><td>As_top (surcharge)</td><td>{res.area.As_top.toFixed(4)} m²</td></tr>
+              <tr><td><b>As (total)</b></td><td><b>{res.area.As.toFixed(4)} m²</b></td></tr>
+              <tr><td>Q máx volumétrico</td><td>{res.Q_max_volumetrico.toFixed(0)} t/h</td></tr>
+              <tr><td>Q real</td><td>{inp.Q.toFixed(0)} t/h ({res.fill_pct.toFixed(0)}%)</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <div className="tp-panel">
+            <div className="tp-panel-title">Editor visual do perfil</div>
+            <Profile2D inp={inp} res={res} onSegmentEdit={handleProfileEdit} />
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ============== TAB 2: 3D ============== */}
+    {activeTab === 2 && (
+      <div className="tp-panel">
+        <div className="tp-panel-title">Visualização 3D do transportador</div>
+        <Viewer3D inp={inp} />
+        <div style={{ fontSize: "10px", color: "#54677a", marginTop: "8px" }}>
+          🖱️ Clique e arraste para girar · Scroll para zoom · Botão direito para pan
+        </div>
+      </div>
+    )}
+
+    {/* ============== TAB 3: TENSÕES ============== */}
+    {activeTab === 3 && (
+      <>
+        <div className="tp-panel">
+          <div className="tp-panel-title">Diagrama de tensões ao longo do percurso</div>
+          <ResponsiveContainer width="100%" height={280}>
+            <LineChart data={res.tensionProfile} margin={{ top: 10, right: 25, left: 10, bottom: 25 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#eef2f6" />
+              <XAxis dataKey="x" tick={{ fill: "#54677a", fontSize: 10 }}
+                label={{ value: "Posição (m)", position: "insideBottom", offset: -15, fill: "#54677a", fontSize: 11 }} />
+              <YAxis tick={{ fill: "#54677a", fontSize: 10 }}
+                label={{ value: "Tensão (kgf)", angle: -90, position: "insideLeft", fill: "#54677a", fontSize: 11 }} />
+              <Tooltip contentStyle={{ background: "#fff", border: "1px solid #d8dee5", borderRadius: 6, fontSize: 11 }} />
+              <Legend wrapperStyle={{ fontSize: 10 }} />
+              <ReferenceLine y={res.Tad_admiss} stroke="#c0392b" strokeDasharray="5 5" label={{ value: "Tad admissível", fontSize: 10, fill: "#c0392b" }} />
+              <Line type="monotone" dataKey="T_carga" name="Lado de carga" stroke="#0a9396" strokeWidth={2.5} dot={false} />
+              <Line type="monotone" dataKey="T_retorno" name="Lado de retorno" stroke="#54677a" strokeWidth={2} dot={false} strokeDasharray="4 3" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="tp-grid tp-grid-2" style={{ marginTop: "14px" }}>
+          <div className="tp-panel">
+            <div className="tp-panel-title">Resistências CEMA</div>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={[
+                { name: "Tx (atrito)", v: res.Tx_total, fill: "#0a9396" },
+                { name: "Ty (correia)", v: res.Ty_total, fill: "#005f73" },
+                { name: "Tym (material)", v: res.Tym_total, fill: "#9b5708" },
+                { name: "Tm (elevação)", v: res.Tm_total, fill: "#ca6702" },
+                { name: "Tac (acessórios)", v: res.Tac, fill: "#54677a" },
+              ]} margin={{ top: 10, right: 10, left: 10, bottom: 35 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef2f6" />
+                <XAxis dataKey="name" tick={{ fill: "#54677a", fontSize: 9 }} angle={-25} textAnchor="end" height={50} />
+                <YAxis tick={{ fill: "#54677a", fontSize: 10 }} label={{ value: "kgf", angle: -90, position: "insideLeft", fill: "#54677a", fontSize: 10 }} />
+                <Tooltip contentStyle={{ background: "#fff", border: "1px solid #d8dee5", borderRadius: 6, fontSize: 11 }} />
+                <Bar dataKey="v" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="tp-panel">
+            <div className="tp-panel-title">Tensões críticas</div>
+            <table className="tp-table">
+              <tbody>
+                <tr><td>T1 (motriz)</td><td><b>{res.T1.toFixed(0)} kgf</b></td><td><span className={"tp-badge " + (res.T1_ok ? "ok" : "bad")}>{res.T1_ok ? "OK" : "Excede"}</span></td></tr>
+                <tr><td>T2 (frouxo)</td><td>{res.T2.toFixed(0)} kgf</td><td>—</td></tr>
+                <tr><td>Te (efetiva)</td><td>{res.Te.toFixed(0)} kgf</td><td>—</td></tr>
+                <tr><td>Tmax percurso</td><td>{res.Tmax.toFixed(0)} kgf</td><td><span className={"tp-badge " + (res.Tmax_ok ? "ok" : "bad")}>{res.Tmax_ok ? "OK" : "Excede"}</span></td></tr>
+                <tr><td>Tmin percurso</td><td>{res.Tmin.toFixed(0)} kgf</td><td>—</td></tr>
+                <tr><td>Tad admissível</td><td>{res.Tad_admiss.toFixed(0)} kgf</td><td>FS={inp.FS_c}</td></tr>
+                <tr><td>Cw (envolvimento)</td><td>{res.Cw.toFixed(3)}</td><td>μ={res.mu}</td></tr>
+                <tr><td>W take-up</td><td>{res.W_tu.toFixed(0)} kgf</td><td>{inp.tipo_tu}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </>
+    )}
+
+    {/* ============== TAB 4: ÂNGULOS & CURVAS ============== */}
+    {activeTab === 4 && (
+      <>
+        <div className="tp-panel">
+          <div className="tp-panel-title">Verificação de inclinação por trecho (CEMA Tab. 4-1)</div>
+          <table className="tp-table">
+            <thead><tr><th>Trecho</th><th>L (m)</th><th>H (m)</th><th>β (°)</th><th>β máx (°)</th><th>Margem</th><th>Status</th></tr></thead>
+            <tbody>
+              {res.checkBetas.map((c, i) => (
+                <tr key={i}>
+                  <td>{i + 1}</td>
+                  <td>{inp.segments[i].L}</td>
+                  <td>{inp.segments[i].H}</td>
+                  <td><b>{c.beta.toFixed(2)}</b></td>
+                  <td>{c.beta_max}</td>
+                  <td style={{ color: c.margem >= 0 ? "#1f6b46" : "#8a221b", fontWeight: 600 }}>{c.margem.toFixed(1)}°</td>
+                  <td><span className={"tp-badge " + (c.ok ? "ok" : "bad")}>{c.ok ? "OK" : "Excede"}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="tp-panel" style={{ marginTop: "14px" }}>
+          <div className="tp-panel-title">Curvas verticais nas junções (CEMA Cap. 9)</div>
+          {res.junctions.length === 0 ? (
+            <div style={{ fontSize: "11px", color: "#54677a", padding: "14px", textAlign: "center" }}>
+              Apenas 1 trecho — sem curvas verticais.
+            </div>
+          ) : (
+            <table className="tp-table">
+              <thead><tr><th>Junção</th><th>x (m)</th><th>β antes</th><th>β depois</th><th>Δβ</th><th>Tipo</th><th>T local</th><th>R mín. (m)</th></tr></thead>
+              <tbody>
+                {res.junctions.map((j: any, i: number) => (
+                  <tr key={i}>
+                    <td>{j.idx + 1}→{j.idx + 2}</td>
+                    <td>{j.x.toFixed(0)}</td>
+                    <td>{j.beta_a.toFixed(1)}°</td>
+                    <td>{j.beta_b.toFixed(1)}°</td>
+                    <td style={{ fontWeight: 600 }}>{j.delta_beta > 0 ? "+" : ""}{j.delta_beta.toFixed(1)}°</td>
+                    <td><span className={"tp-badge " + (j.tipo === "concava" ? "warn" : j.tipo === "convexa" ? "ok" : "ok")}>{j.tipo}</span></td>
+                    <td>{j.T_local.toFixed(0)} kgf</td>
+                    <td><b>{j.R_min.toFixed(1)}</b></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <div style={{ fontSize: "10px", color: "#54677a", marginTop: "10px", padding: "8px 12px", background: "#f8fafb", borderRadius: 4 }}>
+            <b>Côncava:</b> R_min = T_local / (Wb·g) — evita levantamento da correia<br />
+            <b>Convexa:</b> R_min = K · B (K=125 têxtil, K=200 steel cord) — limite de flexão
+          </div>
+        </div>
+      </>
+    )}
+
+    {/* ============== TAB 5: RESULTADOS ============== */}
+    {activeTab === 5 && (
+      <>
+        <div>
+          {warnings.map((w, i) => (
+            <div key={i} className={"tp-warning " + w.type}>
+              <span>{w.type === "ok" ? "✓" : w.type === "warn" ? "⚠" : "✗"}</span>
+              <span>{w.msg}</span>
+            </div>
+          ))}
+        </div>
+        <div className="tp-grid tp-grid-2" style={{ marginTop: "14px" }}>
+          <div className="tp-panel">
+            <div className="tp-panel-title">Resultados completos</div>
+            <table className="tp-table">
+              <tbody>
+                <tr><td>L total horizontal</td><td><b>{res.L_total.toFixed(2)} m</b></td></tr>
+                <tr><td>H total elevação</td><td><b>{res.H_total.toFixed(2)} m</b></td></tr>
+                <tr><td>L real (3D)</td><td>{res.L_real_total.toFixed(2)} m</td></tr>
+                <tr><td>β global</td><td>{res.beta_global.toFixed(2)}°</td></tr>
+                <tr><td>Wm (peso material)</td><td>{res.Wm.toFixed(2)} kgf/m</td></tr>
+                <tr><td>Ky (CEMA Tab. 6-2)</td><td>{res.Ky.toFixed(4)}</td></tr>
+                <tr><td>Kx (resist. mancais)</td><td>{res.Kx.toFixed(4)}</td></tr>
+                <tr><td>Tx (atrito horiz.)</td><td>{res.Tx_total.toFixed(0)} kgf</td></tr>
+                <tr><td>Ty (flexão correia)</td><td>{res.Ty_total.toFixed(0)} kgf</td></tr>
+                <tr><td>Tym (flexão material)</td><td>{res.Tym_total.toFixed(0)} kgf</td></tr>
+                <tr><td>Tm (elevação)</td><td>{res.Tm_total.toFixed(0)} kgf</td></tr>
+                <tr><td>Tac (acessórios)</td><td>{res.Tac.toFixed(0)} kgf</td></tr>
+                <tr><td><b>Te efetiva</b></td><td><b>{res.Te.toFixed(0)} kgf</b></td></tr>
+                <tr><td>Pe (eixo do tambor)</td><td>{res.Pe_kW.toFixed(2)} kW</td></tr>
+                <tr><td>η transmissão</td><td>{(res.eta_total * 100).toFixed(1)}%</td></tr>
+                <tr><td><b>Pm (instalada)</b></td><td><b>{res.Pm_kW.toFixed(2)} kW</b></td></tr>
+                <tr><td>Pm por motor ({inp.n_motores}×)</td><td>{res.Pm_por_motor.toFixed(2)} kW</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div className="tp-panel">
+            <div className="tp-panel-title">Resistências por trecho</div>
+            <table className="tp-table">
+              <thead><tr><th>#</th><th>Tx</th><th>Ty</th><th>Tym</th><th>Tm</th><th>Total</th></tr></thead>
+              <tbody>
+                {res.segResistances.map((r: any, i: number) => (
+                  <tr key={i}>
+                    <td>{i + 1}</td>
+                    <td>{r.Tx.toFixed(0)}</td>
+                    <td>{r.Ty.toFixed(0)}</td>
+                    <td>{r.Tym.toFixed(0)}</td>
+                    <td>{r.Tm.toFixed(0)}</td>
+                    <td><b>{r.T_acum.toFixed(0)}</b></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </>
+    )}
+
+    {/* ============== TAB 6: EQUAÇÕES ============== */}
+    {activeTab === 6 && (
+      <div className="tp-grid tp-grid-2">
+        <div className="tp-eq-box">
+          <div className="tp-eq-title">Tensão efetiva (CEMA)</div>
+          <div className="tp-eq-formula">Te = Tx + Ty + Tym + Tm + Tac</div>
+          <div style={{ fontSize: 10, color: "#54677a", marginTop: 4 }}>
+            Tx = Kt·Kx·L · &nbsp; Ty = Kt·Ky·L·Wb · &nbsp; Tym = Kt·Ky·L·Wm · &nbsp; Tm = H·Wm
+          </div>
+        </div>
+        <div className="tp-eq-box">
+          <div className="tp-eq-title">Eytelwein (envolvimento)</div>
+          <div className="tp-eq-formula">T1/T2 = e^(μ·θ) &nbsp;→&nbsp; Cw = 1 / (e^(μθ) − 1)</div>
+          <div style={{ fontSize: 10, color: "#54677a", marginTop: 4 }}>
+            T2 = Cw·Te · &nbsp; T1 = T2 + Te
+          </div>
+        </div>
+        <div className="tp-eq-box">
+          <div className="tp-eq-title">Capacidade volumétrica</div>
+          <div className="tp-eq-formula">Q_max = As · V · 3600 · ρ/1000 [t/h]</div>
+          <div style={{ fontSize: 10, color: "#54677a", marginTop: 4 }}>
+            As = Ab + As_top (CEMA Cap. 4, 3-roll equal trough)
+          </div>
+        </div>
+        <div className="tp-eq-box">
+          <div className="tp-eq-title">Potência instalada</div>
+          <div className="tp-eq-formula">Pm = (Te·g·V) / (η_red·η_acopl·η_motor) · FS</div>
+        </div>
+        <div className="tp-eq-box">
+          <div className="tp-eq-title">Curva côncava (CEMA Cap. 9)</div>
+          <div className="tp-eq-formula">R_min = T_local / (Wb · g)</div>
+          <div style={{ fontSize: 10, color: "#54677a", marginTop: 4 }}>
+            Evita levantamento da correia do leito de roletes
+          </div>
+        </div>
+        <div className="tp-eq-box">
+          <div className="tp-eq-title">Curva convexa (CEMA Cap. 9)</div>
+          <div className="tp-eq-formula">R_min = K · B &nbsp; (K = 125 têxtil, 200 steel cord)</div>
+        </div>
+        <div className="tp-eq-box">
+          <div className="tp-eq-title">Take-up gravidade</div>
+          <div className="tp-eq-formula">W_tu ≈ 2 · T2</div>
+        </div>
+        <div className="tp-eq-box">
+          <div className="tp-eq-title">Área seção (3-roll equal)</div>
+          <div className="tp-eq-formula">Ab = l·hl + b·cosλ·hl &nbsp; ; &nbsp; As_top = (top/2)²·tanφ</div>
+        </div>
+      </div>
+    )}
+  </div>);
 }
