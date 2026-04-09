@@ -65,9 +65,13 @@ export default function Dashboard({ user, logoutAction, checkoutStatus }: { user
   const confirmSave = async () => { if (!pName) return; localStorage.setItem(`p:${user.email}:${Date.now()}`, JSON.stringify({ ...saveM, name: pName, at: new Date().toISOString() })); setSaveM(null); showToast("Cálculo salvo!", "s") };
   
   const activeMod = MODULES.find(m => m.id === mod);
-  const canAccess = user.modules.includes(mod);
-  const activeModules = MODULES.filter(m => user.modules.includes(m.id));
-  const inactiveModules = MODULES.filter(m => !user.modules.includes(m.id));
+  // PAGAMENTO DESATIVADO — descomente as 3 linhas abaixo e remova as substituições para reativar
+  // const canAccess = user.modules.includes(mod);
+  // const activeModules = MODULES.filter(m => user.modules.includes(m.id));
+  // const inactiveModules = MODULES.filter(m => !user.modules.includes(m.id));
+  const canAccess = true; // TEMP: bypass pagamento
+  const activeModules = MODULES; // TEMP: bypass pagamento
+  const inactiveModules: typeof MODULES = []; // TEMP: bypass pagamento
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'IBM Plex Mono',monospace", fontSize: "12px" }}>
