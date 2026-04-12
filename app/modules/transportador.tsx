@@ -121,6 +121,35 @@ const IDLER_CLASS: Record<string, { l: string; A1: number; A2: number; max_load_
   F: { l: "CEMA F (heaviest)", A1: 3.6, A2: 0.0300, max_load_lb: 3600 },
 };
 
+// Capacidade dinâmica dos rolamentos por classe CEMA (N) — CEMA Table 11.1
+const IDLER_BEARING_C: Record<string, number> = {
+  B: 3_800, C: 6_700, D: 9_600, E: 14_200, F: 20_000,
+};
+
+// Diâmetro padrão do rolo por largura e classe (mm) — CEMA Table 6.9
+const IDLER_ROLL_D: Record<string, number> = {
+  B: 89, C: 102, D: 127, E: 152, F: 178,
+};
+
+// Catálogo de correias — (rating em kN/m = N/mm, resistência nominal por largura unitária)
+const BELT_CATALOG: { type: string; rating: number; cover: string; max_vel: number; st: boolean }[] = [
+  { type: "EP 200", rating: 200, cover: "3+1.5", max_vel: 3.5, st: false },
+  { type: "EP 250", rating: 250, cover: "4+2", max_vel: 4.0, st: false },
+  { type: "EP 315", rating: 315, cover: "5+2", max_vel: 4.5, st: false },
+  { type: "EP 400", rating: 400, cover: "6+2", max_vel: 5.0, st: false },
+  { type: "EP 500", rating: 500, cover: "6+3", max_vel: 5.5, st: false },
+  { type: "EP 630", rating: 630, cover: "8+3", max_vel: 6.0, st: false },
+  { type: "EP 800", rating: 800, cover: "10+4", max_vel: 6.5, st: false },
+  { type: "EP 1000", rating: 1000, cover: "12+4", max_vel: 7.0, st: false },
+  { type: "ST 500", rating: 500, cover: "6+3", max_vel: 5.5, st: true },
+  { type: "ST 800", rating: 800, cover: "8+4", max_vel: 6.5, st: true },
+  { type: "ST 1000", rating: 1000, cover: "10+5", max_vel: 7.5, st: true },
+  { type: "ST 1250", rating: 1250, cover: "12+6", max_vel: 8.5, st: true },
+  { type: "ST 1600", rating: 1600, cover: "14+7", max_vel: 9.5, st: true },
+  { type: "ST 2000", rating: 2000, cover: "16+8", max_vel: 10.5, st: true },
+  { type: "ST 2500", rating: 2500, cover: "18+9", max_vel: 11.5, st: true },
+];
+
 // Material database — densidade, surcharge, repose, ângulo máximo
 export const MATERIAL_DB: Record<string, { name: string; rho: number; phi_s: number; phi_r: number; phi_max: number }> = {
   iron_ore_pellets: { name: "Pelotas de minério de ferro", rho: 2100, phi_s: 15, phi_r: 30, phi_max: 13 },
@@ -133,6 +162,24 @@ export const MATERIAL_DB: Record<string, { name: string; rho: number; phi_s: num
   sand_dry: { name: "Areia seca", rho: 1600, phi_s: 15, phi_r: 30, phi_max: 16 },
   bauxite: { name: "Bauxita", rho: 1280, phi_s: 25, phi_r: 35, phi_max: 18 },
   cement_clinker: { name: "Clínquer de cimento", rho: 1400, phi_s: 22, phi_r: 38, phi_max: 18 },
+  copper_ore: { name: "Minério de cobre", rho: 1900, phi_s: 20, phi_r: 35, phi_max: 18 },
+  nickel_ore: { name: "Minério de níquel", rho: 1700, phi_s: 22, phi_r: 35, phi_max: 18 },
+  manganese_ore: { name: "Minério de manganês", rho: 2000, phi_s: 20, phi_r: 35, phi_max: 18 },
+  phosphate_rock: { name: "Rocha fosfática", rho: 1400, phi_s: 25, phi_r: 38, phi_max: 18 },
+  coke_petroleum: { name: "Coque de petróleo", rho: 800, phi_s: 20, phi_r: 32, phi_max: 16 },
+  wood_chips: { name: "Cavacos de madeira", rho: 350, phi_s: 30, phi_r: 45, phi_max: 22 },
+  sugar_cane_bagasse: { name: "Bagaço de cana", rho: 200, phi_s: 35, phi_r: 50, phi_max: 25 },
+  potash: { name: "Potassa", rho: 1200, phi_s: 18, phi_r: 30, phi_max: 16 },
+  salt_bulk: { name: "Sal a granel", rho: 1200, phi_s: 20, phi_r: 32, phi_max: 18 },
+  grain_wheat: { name: "Grãos de trigo", rho: 780, phi_s: 17, phi_r: 28, phi_max: 15 },
+  soybean: { name: "Soja", rho: 720, phi_s: 16, phi_r: 28, phi_max: 14 },
+  corn_maize: { name: "Milho", rho: 740, phi_s: 16, phi_r: 28, phi_max: 14 },
+  sand_wet: { name: "Areia úmida", rho: 1900, phi_s: 22, phi_r: 38, phi_max: 18 },
+  clay_dry: { name: "Argila seca", rho: 1100, phi_s: 30, phi_r: 45, phi_max: 20 },
+  talc: { name: "Talco", rho: 900, phi_s: 25, phi_r: 40, phi_max: 18 },
+  gypsum: { name: "Gesso", rho: 1300, phi_s: 22, phi_r: 35, phi_max: 18 },
+  glass_cullet: { name: "Caco de vidro", rho: 1600, phi_s: 18, phi_r: 30, phi_max: 14 },
+  fly_ash: { name: "Cinza volante", rho: 700, phi_s: 20, phi_r: 35, phi_max: 16 },
   custom: { name: "Customizado", rho: 900, phi_s: 20, phi_r: 35, phi_max: 18 },
 };
 
@@ -392,6 +439,49 @@ function calc(inp: any, pulleys: any[] = []) {
   const torque_peak_worst = Te_start_plug * (d_tamb_mm / 2000);
   const plug_ok = T1_start_plug <= Tad;
 
+  // ----- Vida dos Roletes L10 (CEMA Cap. 11) -----
+  const d_idler_m = (inp.d_idler_mm || 127) / 1000;
+  const n_roll = (V * 60) / (Math.PI * d_idler_m); // rpm do rolo
+  const C_brg = IDLER_BEARING_C[idler_cl] || IDLER_BEARING_C.D;
+  // Carga por rolamento: ramal de carga (3 rolos, 2 rolamentos cada)
+  const F_l_carga_N = (esp_rol * (Wb + Wm) * g) / (3 * 2);
+  // Ramal de retorno (2 rolos, 2 rolamentos cada)
+  const F_l_ret_N = (esp_rol_ret * Wb * g) / (2 * 2);
+  const L10_carga = Math.pow(C_brg / Math.max(F_l_carga_N, 1), 3) * (16_667 / Math.max(n_roll, 1));
+  const L10_ret = Math.pow(C_brg / Math.max(F_l_ret_N, 1), 3) * (16_667 / Math.max(n_roll, 1));
+  const L10_min = Math.min(L10_carga, L10_ret);
+
+  // ----- Seleção de Correia -----
+  const SF_belt_std = 6.67; // CEMA: fator de segurança mínimo correia têxtil
+  const T1_N_per_mm = (T1_eff * g) / (larg_pol * 25.4); // N/mm = kN/m
+  const belt_rating_req = T1_N_per_mm * SF_belt_std; // N/mm necessário
+  const SF_belt_actual = cap_tens / T1_N_per_mm; // fator real (cap_tens em N/m → N/mm)
+  const belt_ok = SF_belt_actual >= SF_belt_std;
+
+  // ----- Comprimento de transição (CEMA Cap. 8) -----
+  // Distância mínima para correia passar de plana para calha (λ)
+  const B_m = (larg_pol * 25.4) / 1000;
+  const transition_L = B_m * Math.tan((ang_rol * Math.PI) / 180) / Math.sin((18 * Math.PI) / 180);
+
+  // ----- Tensões por junção (por trecho) -----
+  const junctions: { x: number; T: number; h: number; seg: number }[] = [];
+  let T_j = T2;
+  let x_j = 0, h_j = 0;
+  junctions.push({ x: 0, T: +T_j.toFixed(1), h: 0, seg: 0 });
+  segments.forEach((seg: any, idx: number) => {
+    const Tx_s = Kx * seg.comp;
+    const Ty_s = Ky * seg.comp * (Wb + Wm);
+    const Tm_s = Wm * seg.comp * Math.sin(seg.ang * Math.PI / 180);
+    const Tsb_s = Tsb * (seg.comp / Math.max(L_total, 1));
+    T_j += Tx_s + Ty_s + Tm_s + Tsb_s;
+    x_j += seg.comp;
+    h_j += seg.comp * Math.sin(seg.ang * Math.PI / 180);
+    junctions.push({ x: +x_j.toFixed(1), T: +T_j.toFixed(1), h: +h_j.toFixed(2), seg: idx + 1 });
+  });
+
+  // ----- Fator de segurança geral -----
+  const SF_T1 = Tad / T1;
+
   return {
     ang_abr_real, T2_factor, T1_eff,
     mass_total, a_start, Fi_start, Te_start, T1_start, P_start_kw, torque_peak_start, start_ok,
@@ -422,6 +512,16 @@ function calc(inp: any, pulleys: any[] = []) {
     tension_ok: T1 <= Tad,
     sag_ok: T2 >= T_sag,
     angle_ok: angle_violations.length === 0,
+    // Vida roletes
+    d_idler_m, n_roll, C_brg, F_l_carga_N, F_l_ret_N, L10_carga, L10_ret, L10_min,
+    // Seleção correia
+    T1_N_per_mm, belt_rating_req, SF_belt_actual, SF_belt_std, belt_ok,
+    // Transição
+    transition_L,
+    // Junções
+    junctions,
+    // Fatores de segurança
+    SF_T1,
   };
 }
 
@@ -1086,6 +1186,54 @@ function ThreeViewer3D({ inp, res, pulleys, palette }: any) {
 }
 
 // ============================================================
+// SEÇÃO TRANSVERSAL SIMPLIFICADA — Para aba Material
+// ============================================================
+function AreaSection({ inp, res, palette }: any) {
+  if (!res) return null;
+  const fa = res.fa;
+  const W = 320, H = 160, padX = 30, padY = 20;
+  const B_mm = inp.larg_pol * 25.4;
+  const scale = (W - 2 * padX) / B_mm;
+  const bw = B_mm * scale;
+  const lambda = inp.ang_rol * Math.PI / 180;
+  const b_util_px = fa.b_util * 1000 * scale;
+  const ll = b_util_px / 3;
+  const centerX = W / 2;
+  const beltY = H - padY;
+  const leftX = centerX - bw / 2;
+  const rightX = centerX + bw / 2;
+  const outerLeft = centerX - b_util_px / 2;
+  const outerRight = centerX + b_util_px / 2;
+  const innerLeft2 = centerX - ll / 2;
+  const innerRight2 = centerX + ll / 2;
+  const sideH = ((b_util_px / 2) - (ll / 2)) * Math.sin(lambda);
+  const topY = beltY - sideH;
+  const h_cap_px = fa.h_cap * 1000 * scale;
+  const surchargeTopY = topY - h_cap_px;
+  const bsW = fa.b_util * 1000 * scale * (1 + 2 * ((b_util_px / 2 - ll / 2) / b_util_px) * Math.cos(lambda));
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: palette.bg0, borderRadius: 6, border: `1px solid ${palette.border}` }}>
+      {/* Belt flat */}
+      <line x1={leftX} y1={beltY} x2={rightX} y2={beltY} stroke={palette.copper} strokeWidth="3"/>
+      {/* Idler support triangle */}
+      <polygon points={`${centerX},${beltY+18} ${centerX-12},${beltY+30} ${centerX+12},${beltY+30}`} fill={palette.border}/>
+      <line x1={outerLeft} y1={beltY+2} x2={outerLeft-8} y2={beltY+22} stroke={palette.border} strokeWidth="2"/>
+      <line x1={outerRight} y1={beltY+2} x2={outerRight+8} y2={beltY+22} stroke={palette.border} strokeWidth="2"/>
+      {/* Trough fill */}
+      <polygon points={`${outerLeft},${beltY} ${innerLeft2},${topY} ${innerRight2},${topY} ${outerRight},${beltY}`} fill={`${palette.primary}22`} stroke={`${palette.primary}88`} strokeWidth="1.5"/>
+      {/* Surcharge cap */}
+      <polygon points={`${innerLeft2},${topY} ${centerX},${surchargeTopY} ${innerRight2},${topY}`} fill={`${palette.primary}44`} stroke={`${palette.primary}`} strokeWidth="1.5"/>
+      {/* Labels */}
+      <text x={centerX} y={H - 4} fill={palette.muted} fontSize="8" textAnchor="middle">B = {B_mm.toFixed(0)} mm</text>
+      <text x={centerX} y={topY - 4} fill={palette.muted} fontSize="8" textAnchor="middle">Au = {(fa.Au * 10000).toFixed(1)} cm²</text>
+      <text x={leftX - 2} y={beltY - sideH/2} fill={palette.copper} fontSize="7" textAnchor="end">λ={inp.ang_rol}°</text>
+      <text x={centerX} y={surchargeTopY - 4} fill={palette.primary} fontSize="7" textAnchor="middle">φs={inp.phi_s}°</text>
+    </svg>
+  );
+}
+
+// ============================================================
 // CAMPO DE ENTRADA (módulo-level para evitar remonte a cada render)
 // ============================================================
 function FField({ label, val, set, unit, step = 1, type = "number", p }: any) {
@@ -1128,7 +1276,7 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
     // Correia
     larg_pol: 72, ang_rol: 35, vel_ms: 2.5, Wb: 59.56, n_lonas: 4, cap_tens: 86298.5,
     // Roletes
-    esp_rol: 1.0, esp_rol_ret: 3.0, idler_cl: "D", p_rol_carga: 40.01, p_rol_ret: 26.8,
+    esp_rol: 1.0, esp_rol_ret: 3.0, idler_cl: "D", p_rol_carga: 40.01, p_rol_ret: 26.8, d_idler_mm: 127,
     // Tambor motor
     d_tamb_mm: 630, ang_abr: 220, mu_lag: 0.35,
     // Acessórios
@@ -1224,6 +1372,8 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
     { l: "3D", i: 8 },
     { l: "Equações", i: 9 },
     { l: "Avisos", i: 10 },
+    { l: "Seleção Correia", i: 12 },
+    { l: "Vida Roletes", i: 13 },
   ];
 
   // ============== RENDER ==============
@@ -1311,24 +1461,50 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
 
         {/* === MATERIAL === */}
         {tab === 0 && (
-          <div style={card}>
-            <div style={cardTitle}>Material Transportado</div>
-            <div style={grid(4)}>
-              <SelField p={palette} label="Material" val={inp.mat_key} set={(v: any) => s("mat_key", v)}
-                opts={Object.keys(MATERIAL_DB).map(k => ({ v: k, l: MATERIAL_DB[k].name }))}/>
-              <FField p={palette} label="Densidade" val={inp.mat_d} set={(v: any) => s("mat_d", v)} unit="kg/m³"/>
-              <FField p={palette} label="Capacidade" val={inp.cap_th} set={(v: any) => s("cap_th", v)} unit="t/h"/>
-              <FField p={palette} label="Surcharge angle Φs" val={inp.phi_s} set={(v: any) => s("phi_s", v)} unit="°"/>
-              <FField p={palette} label="Ângulo máx. transp." val={inp.phi_max_mat} set={(v: any) => s("phi_max_mat", v)} unit="°"/>
+          <>
+            <div style={card}>
+              <div style={cardTitle}>Material Transportado</div>
+              <div style={grid(4)}>
+                <SelField p={palette} label="Material" val={inp.mat_key} set={(v: any) => s("mat_key", v)}
+                  opts={Object.keys(MATERIAL_DB).map(k => ({ v: k, l: MATERIAL_DB[k].name }))}/>
+                <FField p={palette} label="Densidade" val={inp.mat_d} set={(v: any) => s("mat_d", v)} unit="kg/m³"/>
+                <FField p={palette} label="Capacidade" val={inp.cap_th} set={(v: any) => s("cap_th", v)} unit="t/h"/>
+                <FField p={palette} label="Surcharge angle Φs" val={inp.phi_s} set={(v: any) => s("phi_s", v)} unit="°"/>
+                <FField p={palette} label="Ângulo máx. transp." val={inp.phi_max_mat} set={(v: any) => s("phi_max_mat", v)} unit="°"/>
+              </div>
+              <div style={{ marginTop: 14, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 11, color: palette.muted }}>
+                <strong style={{ color: palette.copper }}>Φs (surcharge):</strong> ângulo formado pelo material em movimento sobre a correia.
+                Determina a área do "cap" superior na seção. Tipicamente 5°-10° abaixo do ângulo de repouso.
+                <br/>
+                <strong style={{ color: palette.copper }}>Φ máx:</strong> inclinação máxima na qual o material não escorrega.
+                CEMA recomenda margem de 2°-5° abaixo deste valor.
+              </div>
             </div>
-            <div style={{ marginTop: 14, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 11, color: palette.muted }}>
-              <strong style={{ color: palette.copper }}>Φs (surcharge):</strong> ângulo formado pelo material em movimento sobre a correia.
-              Determina a área do "cap" superior na seção. Tipicamente 5°-10° abaixo do ângulo de repouso.
-              <br/>
-              <strong style={{ color: palette.copper }}>Φ máx:</strong> inclinação máxima na qual o material não escorrega.
-              CEMA recomenda margem de 2°-5° abaixo deste valor.
+            <div style={card}>
+              <div style={cardTitle}>Seção Transversal</div>
+              <div style={{ maxWidth: 360 }}>
+                <AreaSection inp={inp} res={res} palette={palette}/>
+              </div>
+              {res?.fa && (
+                <div style={{ ...grid(3), marginTop: 12 }}>
+                  {[
+                    { l: "Área útil Au", v: (res.fa.Au * 10000).toFixed(2), u: "cm²" },
+                    { l: "Au ref. CEMA (35°/20°)", v: (res.fa_ref.Au * 10000).toFixed(2), u: "cm²" },
+                    { l: "Fator utilização Ku", v: res.Ku.toFixed(3), u: "-", c: res.Ku > 1.05 ? palette.bad : res.Ku < 0.5 ? palette.warn : palette.ok },
+                    { l: "Largura útil b", v: (res.fa.b_util * 1000).toFixed(0), u: "mm" },
+                    { l: "Altura calha", v: (res.fa.h_trough * 1000).toFixed(1), u: "mm" },
+                    { l: "Altura cap surcharge", v: (res.fa.h_cap * 1000).toFixed(1), u: "mm" },
+                  ].map((m, i) => (
+                    <div key={i} style={{ background: palette.bg0, borderLeft: `3px solid ${m.c || palette.primary}`, borderRadius: 5, padding: "8px 10px" }}>
+                      <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" as const }}>{m.l}</div>
+                      <div style={{ fontSize: 15, color: m.c || palette.text, fontWeight: 700, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
+                      <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
+          </>
         )}
 
         {/* === GEOMETRIA === */}
@@ -1437,6 +1613,7 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
                 <FField p={palette} label="Espaç. retorno" val={inp.esp_rol_ret} set={(v: any) => s("esp_rol_ret", v)} unit="m" step={0.1}/>
                 <FField p={palette} label="Peso rolete carga" val={inp.p_rol_carga} set={(v: any) => s("p_rol_carga", v)} unit="kgf"/>
                 <FField p={palette} label="Peso rolete retorno" val={inp.p_rol_ret} set={(v: any) => s("p_rol_ret", v)} unit="kgf"/>
+                <FField p={palette} label="Diâm. rolo (d_idler)" val={inp.d_idler_mm} set={(v: any) => s("d_idler_mm", v)} unit="mm"/>
               </div>
             </div>
             <div style={card}>
