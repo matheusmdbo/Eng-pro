@@ -1741,10 +1741,10 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
             <div style={card}>
               <div style={cardTitle}>Parâmetros de Partida e Frenagem (CEMA 14.5/14.6)</div>
               <div style={grid(4)}>
-                <F label="Fator de partida Kst" val={inp.Kst} set={(v: any) => s("Kst", v)} step={0.1}/>
-                <F label="Tempo de partida" val={inp.t_start} set={(v: any) => s("t_start", v)} unit="s"/>
-                <F label="Tempo de frenagem" val={inp.t_brake} set={(v: any) => s("t_brake", v)} unit="s"/>
-                <F label="Desacel. frenagem" val={inp.a_brake} set={(v: any) => s("a_brake", v)} unit="m/s²" step={0.05}/>
+                <FField p={palette} label="Fator de partida Kst" val={inp.Kst} set={(v: any) => s("Kst", v)} step={0.1}/>
+                <FField p={palette} label="Tempo de partida" val={inp.t_start} set={(v: any) => s("t_start", v)} unit="s"/>
+                <FField p={palette} label="Tempo de frenagem" val={inp.t_brake} set={(v: any) => s("t_brake", v)} unit="s"/>
+                <FField p={palette} label="Desacel. frenagem" val={inp.a_brake} set={(v: any) => s("a_brake", v)} unit="m/s²" step={0.05}/>
               </div>
               <div style={{ marginTop: 12, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 10, color: palette.muted }}>
                 <strong style={{ color: palette.copper }}>Kst:</strong> típico 1.3 (partida suave) a 1.8 (partida direta). Regula o pico de Te na aceleração.<br/>
@@ -1806,8 +1806,8 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
                 </label>
               </div>
               <div style={grid(4)}>
-                <F label="Área contato chute" val={inp.chute_area_m2} set={(v: any) => s("chute_area_m2", v)} unit="m²" step={0.1}/>
-                <F label="Cisalhamento τ material" val={inp.mat_shear_kpa} set={(v: any) => s("mat_shear_kpa", v)} unit="kPa"/>
+                <FField p={palette} label="Área contato chute" val={inp.chute_area_m2} set={(v: any) => s("chute_area_m2", v)} unit="m²" step={0.1}/>
+                <FField p={palette} label="Cisalhamento τ material" val={inp.mat_shear_kpa} set={(v: any) => s("mat_shear_kpa", v)} unit="kPa"/>
               </div>
               <div style={{ marginTop: 12, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 10, color: palette.muted }}>
                 <strong style={{ color: palette.copper }}>τ típicos:</strong> minério de ferro 30-50 kPa, carvão 15-25 kPa, calcário 20-40 kPa.<br/>
