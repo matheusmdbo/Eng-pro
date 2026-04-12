@@ -59,21 +59,18 @@ function Diagram({data}:{data:any}){
 }
 
 export default function MotoMod({onSave,user,UI}:any){
-  const{Inp,Res,Badge,Tabs,SavedCalcs,Scene3D,C,sty}=UI;
+  const{Inp,Res,Badge,Tabs,Scene3D,C,sty,ModuleHeader,ModuleWrap}=UI;
   const[inp,setI]=useState({cap_m3h:395,larg_m:1.99,comp_m:1.14,alt_m:0.16,ang_deg:30,peso_calha:315.8,peso_conj:660.3,rpm:1150,torque_disp:260,n_mot:2,fv:2.7});
   const[res,setR]=useState<any>(null);const[tab,setTab]=useState(0);const s=(k:string,v:any)=>setI(p=>({...p,[k]:v}));
   const handleLoad=(d:any)=>{if(d.inp)setI(d.inp);if(d.res)setR(d.res);};
+  const gbtn={background:"rgba(255,255,255,0.15)",color:"#fff",border:"1px solid rgba(255,255,255,0.3)",borderRadius:6,padding:"8px 14px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"};
 
-  return(<div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
-      <div><h2 style={{margin:0,fontSize:"14px",fontWeight:700}}>Motovibrador</h2><div style={{fontSize:"9px",color:C.muted,marginTop:"2px"}}>Calhas vibratórias — Validado ✓</div></div>
-      <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
-        <SavedCalcs user={user} moduleType="motovibrador" onLoad={handleLoad}/>
-        <button onClick={()=>onSave({type:"motovibrador",inp,res})} style={sty.btn("g")}>Salvar</button>
-        <button onClick={()=>setR(calc(inp))} style={sty.btn("p")}>CALCULAR</button>
-      </div>
-    </div>
+  return(<ModuleWrap>
+    <ModuleHeader icon="◎" name="Motovibrador" norma="Calhas Vibratórias · Catálogo Vimot 2017" color="#a371f7" user={user} moduleType="motovibrador" onSave={()=>onSave({type:"motovibrador",inp,res})} onLoad={handleLoad}>
+      <button onClick={()=>setR(calc(inp))} style={gbtn}>CALCULAR</button>
+    </ModuleHeader>
     <Tabs tab={tab} setTab={setTab}/>
+    <div style={{padding:14}}>
     {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Calha</div><div style={sty.grid(3)}><Inp label="Capacidade" value={inp.cap_m3h} onChange={(v:any)=>s("cap_m3h",v)} unit="m³/h"/><Inp label="Largura" value={inp.larg_m} onChange={(v:any)=>s("larg_m",v)} unit="m"/><Inp label="Comprimento" value={inp.comp_m} onChange={(v:any)=>s("comp_m",v)} unit="m"/><Inp label="Altura" value={inp.alt_m} onChange={(v:any)=>s("alt_m",v)} unit="m"/><Inp label="Ângulo" value={inp.ang_deg} onChange={(v:any)=>s("ang_deg",v)} unit="°"/><Inp label="Fator vel." value={inp.fv} onChange={(v:any)=>s("fv",v)}/></div></div>
     <div style={sty.card}><div style={sty.cardT}>Acionamento</div><div style={sty.grid(3)}><Inp label="Peso calha" value={inp.peso_calha} onChange={(v:any)=>s("peso_calha",v)} unit="kgf"/><Inp label="Peso conjunto" value={inp.peso_conj} onChange={(v:any)=>s("peso_conj",v)} unit="kgf"/><Inp label="Nº motores" value={inp.n_mot} onChange={(v:any)=>s("n_mot",v)}/><Inp label="RPM" value={inp.rpm} onChange={(v:any)=>s("rpm",v)} unit="rpm"/><Inp label="Torque disp." value={inp.torque_disp} onChange={(v:any)=>s("torque_disp",v)} unit="kgf.cm"/></div></div>
     {res&&<div style={sty.card}><div style={sty.cardT}>Resultados <Badge ok={res.ok} y="APROVADO" n="REPROVADO"/></div><div style={sty.grid(3)}><Res label="Vel. projeto" value={res.vel_cm} unit="cm/s"/><Res label="Frequência" value={res.freq} unit="Hz"/><Res label="Amplitude" value={res.amp} unit="cm"/><Res label="Aceleração" value={res.acel} unit="cm/s²"/><Res label="Mult. g" value={res.mult_g} unit="g"/><Res label="Torque total" value={res.torque_total} unit="kgf.cm" type="w"/><Res label="Torque/motor" value={res.torque_mot} unit="kgf.cm" type={res.ok?"s":"d"}/><Res label="Torque disp." value={inp.torque_disp} unit="kgf.cm" type="s"/><Res label="Margem" value={res.margem} unit="%" type={res.margem>20?"s":"w"}/></div></div>}</>}
@@ -89,5 +86,6 @@ export default function MotoMod({onSave,user,UI}:any){
         <ReferenceLine yAxisId="l" x={Math.round(res.freq)} stroke="#f85149" strokeDasharray="3 3"/>
       </LineChart></ResponsiveContainer>}</div>}
     {tab===3&&<div style={sty.card}><div style={sty.cardT}>Modelo 3D</div><Scene3D type="motovibrador" data={res} inputs={inp}/><p style={{fontSize:"9px",color:C.muted,textAlign:"center",marginTop:"6px"}}>Vibração animada · Motovibradores (amarelo)</p></div>}
-  </div>);
+    </div>
+  </ModuleWrap>);
 }

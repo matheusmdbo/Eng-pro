@@ -4,9 +4,9 @@
 // ============================================================
 import { useState, useEffect, useRef } from "react";
 import * as THREE from "three";
-import { Inp, Sel, Res, Badge, Tabs, SavedCalcs, Scene3D, C, sty, MODULES } from "./ui-elements";
+import { Inp, Sel, Res, Badge, Tabs, SavedCalcs, Scene3D, C, sty, MODULES, ModuleHeader, ModuleWrap } from "./ui-elements";
 
-const UI = { Inp, Sel, Res, Badge, Tabs, SavedCalcs, Scene3D, C, sty };
+const UI = { Inp, Sel, Res, Badge, Tabs, SavedCalcs, Scene3D, C, sty, ModuleHeader, ModuleWrap };
 
 function GlossaryPanel({moduleId,visible,onClose}:any){const mod=MODULES.find(m=>m.id===moduleId);if(!visible||!mod)return null;return(<div style={{width:"270px",flexShrink:0,background:C.s1,borderLeft:`1px solid ${C.border}`,padding:"12px",overflowY:"auto",maxHeight:"calc(100vh - 40px)"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}><div style={{fontSize:"10px",fontWeight:600,color:C.accent,letterSpacing:"1px"}}>GLOSSÁRIO</div><button onClick={onClose} style={{background:"none",border:"none",color:C.dim,cursor:"pointer",fontSize:"14px",fontFamily:"inherit"}}>✕</button></div>{mod.glossary.map((cat:any,ci:number)=>(<div key={ci} style={{marginBottom:"12px"}}><div style={{fontSize:"8px",fontWeight:600,letterSpacing:"1px",marginBottom:"6px",padding:"3px 6px",borderRadius:"3px",color:cat.cat==="SAÍDA"?C.success:C.warn,background:cat.cat==="SAÍDA"?"rgba(63,185,80,0.06)":"rgba(210,153,34,0.06)",border:`1px solid ${cat.cat==="SAÍDA"?C.success+"22":C.warn+"22"}`}}>{cat.cat}</div>{cat.items.map((it:any,ii:number)=>(<div key={ii} style={{padding:"4px 6px",marginBottom:"2px",borderRadius:"3px",background:ii%2===0?"transparent":C.s2+"44",borderLeft:`2px solid ${cat.cat==="SAÍDA"?C.success+"44":C.warn+"44"}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}><span style={{fontWeight:600,color:C.accent,fontSize:"9px"}}>{it.s}</span>{it.u&&<span style={{fontSize:"7px",color:C.muted,background:C.s3,padding:"1px 3px",borderRadius:"2px"}}>{it.u}</span>}</div><div style={{fontSize:"8px",color:C.dim,marginTop:"1px",lineHeight:"1.3"}}>{it.d}</div></div>))}</div>))}</div>);}
 
@@ -71,12 +71,19 @@ export default function Dashboard({ user, logoutAction, checkoutStatus }: { user
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'IBM Plex Mono',monospace", fontSize: "12px" }}>
-      <div style={{ background: C.s1, borderBottom: `1px solid ${C.border}`, padding: "8px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}><div style={{ fontSize: "14px", fontWeight: 800, letterSpacing: "2px", background: "linear-gradient(135deg,#58a6ff,#79c0ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>ENGCALC PRO</div><span style={{ fontSize: "8px", color: C.muted }}>v4</span></div>
-        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          {sec === "mod" && canAccess && <button onClick={() => setShowGloss(!showGloss)} style={{ ...sty.btn("g"), fontSize: "9px", padding: "4px 10px", background: showGloss ? C.accentDim : "transparent" }}>{showGloss ? "✕ Glossário" : "📖 Glossário"}</button>}
+      <div style={{ background: "linear-gradient(135deg,#0d1a2e,#0d2137)", borderBottom: `1px solid ${C.border}`, padding: "10px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div style={{ width: 32, height: 32, borderRadius: 8, background: "linear-gradient(135deg,#1a4a8a,#58a6ff)", display: "grid", placeItems: "center", fontSize: 16, fontWeight: 800, color: "#fff", border: "1px solid rgba(88,166,255,0.3)" }}>E</div>
+          <div>
+            <div style={{ fontSize: "14px", fontWeight: 800, letterSpacing: "2px", background: "linear-gradient(135deg,#58a6ff,#79c0ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>ENGCALC PRO</div>
+            <div style={{ fontSize: "8px", color: C.muted, letterSpacing: "1px" }}>ENGENHARIA DE EQUIPAMENTOS</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          {sec === "mod" && canAccess && <button onClick={() => setShowGloss(!showGloss)} style={{ background: showGloss ? "rgba(88,166,255,0.2)" : "rgba(255,255,255,0.06)", color: showGloss ? C.accent : C.dim, border: `1px solid ${showGloss ? C.accent+"44" : "rgba(255,255,255,0.1)"}`, borderRadius: 6, padding: "5px 12px", fontSize: "9px", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{showGloss ? "✕ Glossário" : "📖 Glossário"}</button>}
+          <div style={{ width: 1, height: 20, background: C.border }} />
           <span style={{ fontSize: "10px", color: C.dim }}>{user.name}</span>
-          <form action={logoutAction}><button style={{ ...sty.btn("g"), fontSize: "9px", padding: "4px 10px" }}>Sair</button></form>
+          <form action={logoutAction}><button style={{ background: "rgba(255,255,255,0.06)", color: C.dim, border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, padding: "5px 12px", fontSize: "9px", fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>Sair</button></form>
         </div>
       </div>
       <div style={{ display: "flex", minHeight: "calc(100vh - 40px)" }}>

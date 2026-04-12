@@ -57,21 +57,18 @@ function Diagram({data}:{data:any}){
 }
 
 export default function PistMod({onSave,user,UI}:any){
-  const{Inp,Res,Badge,Tabs,SavedCalcs,Scene3D,C,sty}=UI;
+  const{Inp,Res,Badge,Tabs,Scene3D,C,sty,ModuleHeader,ModuleWrap}=UI;
   const[inp,setI]=useState({p_bar:140,Aa_cm2:50.26,Ar_cm2:25.63,curso_mm:1600,t_ab:2.9,peso_kg:1097,n_rodas:8,mu_rod:0.02,larg_m:1.6,comp_m:1.1,pn_Nm2:170000,n_pist:1});
   const[res,setR]=useState<any>(null);const[tab,setTab]=useState(0);const s=(k:string,v:any)=>setI(p=>({...p,[k]:v}));
   const handleLoad=(d:any)=>{if(d.inp)setI(d.inp);if(d.res)setR(d.res);};
+  const gbtn={background:"rgba(255,255,255,0.15)",color:"#fff",border:"1px solid rgba(255,255,255,0.3)",borderRadius:6,padding:"8px 14px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"};
 
-  return(<div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
-      <div><h2 style={{margin:0,fontSize:"14px",fontWeight:700}}>Pistão de Abertura</h2><div style={{fontSize:"9px",color:C.muted,marginTop:"2px"}}>Cilindros hidráulicos — Validado ✓</div></div>
-      <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
-        <SavedCalcs user={user} moduleType="pistao" onLoad={handleLoad}/>
-        <button onClick={()=>onSave({type:"pistao",inp,res})} style={sty.btn("g")}>Salvar</button>
-        <button onClick={()=>setR(calc(inp))} style={sty.btn("p")}>CALCULAR</button>
-      </div>
-    </div>
+  return(<ModuleWrap>
+    <ModuleHeader icon="⇥" name="Pistão de Abertura" norma="Cilindros Hidráulicos · Eurocode 1 Part 4" color="#d29922" user={user} moduleType="pistao" onSave={()=>onSave({type:"pistao",inp,res})} onLoad={handleLoad}>
+      <button onClick={()=>setR(calc(inp))} style={gbtn}>CALCULAR</button>
+    </ModuleHeader>
     <Tabs tab={tab} setTab={setTab}/>
+    <div style={{padding:14}}>
     {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Cilindro</div><div style={sty.grid(3)}><Inp label="Pressão UH" value={inp.p_bar} onChange={(v:any)=>s("p_bar",v)} unit="bar"/><Inp label="Área atuação" value={inp.Aa_cm2} onChange={(v:any)=>s("Aa_cm2",v)} unit="cm²"/><Inp label="Área retorno" value={inp.Ar_cm2} onChange={(v:any)=>s("Ar_cm2",v)} unit="cm²"/><Inp label="Curso" value={inp.curso_mm} onChange={(v:any)=>s("curso_mm",v)} unit="mm"/><Inp label="Tempo abert." value={inp.t_ab} onChange={(v:any)=>s("t_ab",v)} unit="s"/><Inp label="Nº pistões" value={inp.n_pist} onChange={(v:any)=>s("n_pist",v)}/></div></div>
     <div style={sty.card}><div style={sty.cardT}>Comporta</div><div style={sty.grid(3)}><Inp label="Peso" value={inp.peso_kg} onChange={(v:any)=>s("peso_kg",v)} unit="kg"/><Inp label="Nº rodas" value={inp.n_rodas} onChange={(v:any)=>s("n_rodas",v)}/><Inp label="μ rodas" value={inp.mu_rod} onChange={(v:any)=>s("mu_rod",v)}/><Inp label="Larg. saída" value={inp.larg_m} onChange={(v:any)=>s("larg_m",v)} unit="m"/><Inp label="Comp. saída" value={inp.comp_m} onChange={(v:any)=>s("comp_m",v)} unit="m"/><Inp label="P. material" value={inp.pn_Nm2} onChange={(v:any)=>s("pn_Nm2",v)} unit="N/m²"/></div></div>
     {res&&<><div style={sty.card}><div style={sty.cardT}>Forças <Badge ok={res.ok} y="FS≥1.2" n="FS<1.2"/></div>
@@ -89,5 +86,6 @@ export default function PistMod({onSave,user,UI}:any){
         <ReferenceLine y={res.f_disp} stroke="#3fb950" strokeDasharray="5 3" label={{value:"F disp",fill:"#3fb950",fontSize:9}}/>
       </AreaChart></ResponsiveContainer>}</div>}
     {tab===3&&<div style={sty.card}><div style={sty.cardT}>Modelo 3D</div><Scene3D type="pistao" data={res} inputs={inp}/><p style={{fontSize:"9px",color:C.muted,textAlign:"center",marginTop:"6px"}}>Vermelho=pressão material · Verde=força pistão</p></div>}
-  </div>);
+    </div>
+  </ModuleWrap>);
 }

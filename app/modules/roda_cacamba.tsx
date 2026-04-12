@@ -311,7 +311,7 @@ function BucketWheelDiagram({ inp, data }: { inp: any; data: any }) {
 // COMPONENTE PRINCIPAL
 // ============================================================
 export default function RodaCacambaMod({ onSave, user, UI }: any) {
-  const { Inp, Sel, Res, Badge, Tabs, SavedCalcs, C, sty } = UI;
+  const { Inp, Sel, Res, Badge, C, sty, ModuleHeader, ModuleWrap } = UI;
 
   const [inp, setI] = useState({
     // Geometria de corte
@@ -340,22 +340,19 @@ export default function RodaCacambaMod({ onSave, user, UI }: any) {
 
   const subTabs = ["Entrada", "Escavação", "Motores", "Diagrama"];
 
-  return (<div>
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
-      <div>
-        <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 700 }}>Roda de Caçambas</h2>
-        <div style={{ fontSize: "9px", color: C.muted, marginTop: "2px" }}>FEM 2.131/132 · BWE (1975) — Validado ✓</div>
-      </div>
-      <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-        <SavedCalcs user={user} moduleType="roda_cacamba" onLoad={handleLoad} />
-        <button onClick={() => onSave({ type: "roda_cacamba", inp, res })} style={sty.btn("g")}>Salvar</button>
-        <button onClick={() => setR(calcAll(inp))} style={sty.btn("p")}>CALCULAR</button>
-      </div>
+  const gbtn = { background: "rgba(255,255,255,0.15)", color: "#fff", border: "1px solid rgba(255,255,255,0.3)", borderRadius: 6, padding: "8px 14px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" };
+  const tabSty = (a: boolean) => ({ background: a ? C.bg : "transparent", color: a ? C.accent : C.dim, border: `1px solid ${a ? C.border : "transparent"}`, borderBottom: a ? `1px solid ${C.bg}` : "1px solid transparent", borderRadius: "6px 6px 0 0", padding: "7px 14px", fontSize: 11, fontWeight: a ? 700 : 500, cursor: "pointer", fontFamily: "inherit", marginBottom: -1 });
+
+  return (<ModuleWrap>
+    <ModuleHeader icon="⚙" name="Roda de Caçambas" norma="FEM 2.131/132 · BWE (1975)" color="#e879f7" user={user} moduleType="roda_cacamba" onSave={() => onSave({ type: "roda_cacamba", inp, res })} onLoad={handleLoad}>
+      <button onClick={() => setR(calcAll(inp))} style={gbtn}>CALCULAR</button>
+    </ModuleHeader>
+
+    <div style={{ display: "flex", gap: 4, padding: "8px 10px 0", background: C.s1, borderBottom: `1px solid ${C.border}`, flexWrap: "wrap", marginBottom: 14 }}>
+      {subTabs.map((t, i) => <button key={i} onClick={() => setSubTab(i)} style={tabSty(subTab === i)}>{t}</button>)}
     </div>
 
-    <div style={{ display: "flex", gap: "4px", marginBottom: "14px", flexWrap: "wrap" }}>
-      {subTabs.map((t, i) => <button key={i} onClick={() => setSubTab(i)} style={{ ...sty.tab(subTab === i), fontSize: "9px", padding: "5px 10px" }}>{t}</button>)}
-    </div>
+    <div style={{ padding: 14 }}>
 
     {/* ======== DADOS DE ENTRADA ======== */}
     {subTab === 0 && <>
@@ -545,5 +542,6 @@ export default function RodaCacambaMod({ onSave, user, UI }: any) {
           <BucketWheelDiagram inp={inp} data={res} />}
       </div>
     </>}
-  </div>);
+    </div>
+  </ModuleWrap>);
 }

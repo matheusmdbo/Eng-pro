@@ -61,24 +61,21 @@ function Diagram({inp,data}:{inp:any;data:any}){
 }
 
 export default function SiloMod({onSave,user,UI}:any){
-  const{Inp,Sel,Res,Tabs,SavedCalcs,Scene3D,C,sty}=UI;
+  const{Inp,Sel,Res,Tabs,Scene3D,C,sty,ModuleHeader,ModuleWrap}=UI;
   const[mat,setMat]=useState("carvao");
   const[inp,setI]=useState({density:900,z:12.7,b:8.8,c:8.8,beta_deg:22.5,aK:1.15,Km:0.52,au:1.12,um:0.49,aphi:1.16,phim_deg:31,Cb:1.6,hh:9.3});
   const[res,setR]=useState<any>(null);const[tab,setTab]=useState(0);
   const s=(k:string,v:any)=>setI(p=>({...p,[k]:v}));
   const updMat=(k:string)=>{setMat(k);if(k!=="custom"){const m=MATS[k];setI(p=>({...p,density:m.d,aK:m.aK,Km:m.Km,au:m.au,um:m.um,aphi:m.aphi,phim_deg:m.phim}));}};
   const handleLoad=(d:any)=>{if(d.inp)setI(d.inp);if(d.res)setR(d.res);};
+  const gbtn={background:"rgba(255,255,255,0.15)",color:"#fff",border:"1px solid rgba(255,255,255,0.3)",borderRadius:6,padding:"8px 14px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"};
 
-  return(<div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
-      <div><h2 style={{margin:0,fontSize:"14px",fontWeight:700}}>Pressão em Silos</h2><div style={{fontSize:"9px",color:C.muted,marginTop:"2px"}}>EN 1991-4 — Validado ✓</div></div>
-      <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
-        <SavedCalcs user={user} moduleType="silo" onLoad={handleLoad}/>
-        <button onClick={()=>onSave({type:"silo",inp,res})} style={sty.btn("g")}>Salvar</button>
-        <button onClick={()=>setR(calc(inp))} style={sty.btn("p")}>CALCULAR</button>
-      </div>
-    </div>
+  return(<ModuleWrap>
+    <ModuleHeader icon="⬡" name="Pressão em Silos" norma="EN 1991-4 (Eurocode 1 Part 4)" color="#58a6ff" user={user} moduleType="silo" onSave={()=>onSave({type:"silo",inp,res})} onLoad={handleLoad}>
+      <button onClick={()=>setR(calc(inp))} style={gbtn}>CALCULAR</button>
+    </ModuleHeader>
     <Tabs tab={tab} setTab={setTab}/>
+    <div style={{padding:14}}>
     {tab===0&&<><div style={sty.card}><div style={sty.cardT}>Material</div><Sel label="Material" value={mat} onChange={updMat} options={Object.entries(MATS).map(([k,v]:any)=>({v:k,l:v.n}))}/><div style={sty.grid(3)}><Inp label="Densidade" value={inp.density} onChange={(v:any)=>s("density",v)} unit="kg/m³"/><Inp label="z" value={inp.z} onChange={(v:any)=>s("z",v)} unit="m"/><Inp label="Cb" value={inp.Cb} onChange={(v:any)=>s("Cb",v)}/></div></div>
     <div style={sty.card}><div style={sty.cardT}>Geometria</div><div style={sty.grid(4)}><Inp label="b" value={inp.b} onChange={(v:any)=>s("b",v)} unit="m"/><Inp label="c" value={inp.c} onChange={(v:any)=>s("c",v)} unit="m"/><Inp label="β" value={inp.beta_deg} onChange={(v:any)=>s("beta_deg",v)} unit="°"/><Inp label="hh" value={inp.hh} onChange={(v:any)=>s("hh",v)} unit="m"/></div></div>
     <div style={sty.card}><div style={sty.cardT}>Coeficientes Eurocode</div><div style={sty.grid(3)}><Inp label="aK" value={inp.aK} onChange={(v:any)=>s("aK",v)}/><Inp label="Km" value={inp.Km} onChange={(v:any)=>s("Km",v)}/><Inp label="aμ" value={inp.au} onChange={(v:any)=>s("au",v)}/><Inp label="μm" value={inp.um} onChange={(v:any)=>s("um",v)}/><Inp label="aφ" value={inp.aphi} onChange={(v:any)=>s("aphi",v)}/><Inp label="φim" value={inp.phim_deg} onChange={(v:any)=>s("phim_deg",v)} unit="°"/></div></div>
@@ -93,5 +90,6 @@ export default function SiloMod({onSave,user,UI}:any){
         <Area type="monotone" dataKey="ph" name="Horizontal" stroke="#f85149" fill="#f85149" fillOpacity={0.08} strokeWidth={2}/><Area type="monotone" dataKey="pv" name="Vertical" stroke="#58a6ff" fill="#58a6ff" fillOpacity={0.08} strokeWidth={2}/>
       </AreaChart></ResponsiveContainer>}</div>}
     {tab===3&&<div style={sty.card}><div style={sty.cardT}>Modelo 3D</div><Scene3D type="silo" data={res} inputs={inp}/><p style={{fontSize:"9px",color:C.muted,textAlign:"center",marginTop:"6px"}}>Setas vermelhas = pressão horizontal</p></div>}
-  </div>);
+    </div>
+  </ModuleWrap>);
 }
