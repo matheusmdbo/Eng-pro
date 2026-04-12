@@ -329,16 +329,34 @@ function calc(inp: any, pulleys: any[] = []) {
   const i_red = n_mot / n_tamb;
 
   // ----- Tensões T1, T2 -----
-  // Ângulo de abraçamento real: 180° base + bônus de snub próximo ao motor
-  const drivePulley = pulleys.find(p => p.type === "drive");
-  const snubPulley = pulleys.find(p => p.type === "snub");
-  let ang_abr_real = ang_abr;
+  // Ângulo de abraçamento real calculado geometricamente:
+  // θ = ang_abr (base, para conveyor horizontal) + inclinação do trecho no tambor + bônus do snub
+  const drivePulley = pulleys.find((p: any) => p.type === "drive");
+  const snubPulley  = pulleys.find((p: any) => p.type === "snub");
+
+  // 1) Inclinação local no tambor motor — percorre os trechos para achar o ângulo do segmento
+  let beta_drive = 0;
+  if (drivePulley) {
+    let xAcc = 0;
+    for (const seg of segments) {
+      xAcc += seg.comp;
+      if (xAcc >= drivePulley.x) { beta_drive = seg.ang; break; }
+    }
+    // Se o tambor está além do comprimento total, usa o ângulo do último trecho
+    if (drivePulley.x >= L_total) beta_drive = segments[segments.length - 1]?.ang || 0;
+  }
+
+  // 2) Bônus do snub: quanto mais próximo o snub do motor, maior o abraçamento adicional
+  let snub_bonus = 0;
   if (drivePulley && snubPulley) {
     const dist = Math.abs(snubPulley.x - drivePulley.x);
-    // Quanto mais próximo o snub do motor, maior o wrap adicional (até +40°)
-    const bonus = dist < 5 ? 40 * (1 - dist / 5) : 0;
-    ang_abr_real = Math.min(240, ang_abr + bonus);
+    snub_bonus = dist < 5 ? 40 * (1 - dist / 5) : 0;
   }
+
+  // 3) Ângulo real = base + contribuição da inclinação do trecho + snub
+  //    Em conveyors ascendentes (beta > 0) a correia abraça mais o tambor de cabeça.
+  //    Em conveyors descendentes (beta < 0) a correia abraça menos.
+  const ang_abr_real = Math.min(270, Math.max(120, ang_abr + beta_drive + snub_bonus));
   const wrap_r = ang_abr_real * Math.PI / 180;
   const Cw = Math.exp(mu_lag * wrap_r);
   const T1 = Te * Cw / (Cw - 1);
@@ -1304,12 +1322,26 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
 
   const s = (k: string, v: any) => setI(p => ({ ...p, [k]: v }));
 
-  // Sincroniza tambores quando muda o comprimento total dos segmentos
+  // Quando inp muda: limita posição do tambor motor e recalcula
+  useEffect(() => {
+    const Ltot = inp.segments.reduce((a: number, sg: any) => a + sg.comp, 0);
+    let latestPulleys = pulleys;
+    setPulleys(prev => {
+      const next = prev.map(p => p.type === "drive" ? { ...p, x: Math.min(p.x, Ltot) } : p);
+      const changed = prev.some((p: any, i: number) => next[i].x !== p.x);
+      latestPulleys = changed ? next : prev;
+      return latestPulleys; // retorna mesma referência se nada mudou → evita loop
+    });
+    // Recalcula com os pulleys atualizados (sincrono com o cálculo acima)
+    setR(calc(inp, latestPulleys));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inp]);
+
+  // Quando tambores são arrastados: recalcula (só pulleys mudou, inp não)
   useEffect(() => {
     setR(calc(inp, pulleys));
-    const Ltot = inp.segments.reduce((a: number, sg: any) => a + sg.comp, 0);
-    setPulleys(prev => prev.map(p => p.type === "drive" ? { ...p, x: Math.min(p.x, Ltot) } : p));
-  }, [inp, pulleys]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pulleys]);
 
   // Quando muda o material da DB, atualiza densidade etc
   useEffect(() => {
