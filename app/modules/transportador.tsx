@@ -1086,6 +1086,32 @@ function ThreeViewer3D({ inp, res, pulleys, palette }: any) {
 }
 
 // ============================================================
+// CAMPO DE ENTRADA (módulo-level para evitar remonte a cada render)
+// ============================================================
+function FField({ label, val, set, unit, step = 1, type = "number", p }: any) {
+  const lbl = { color: p.muted, fontSize: 10, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: 0.4 };
+  const iSty: any = { background: p.bg0, color: p.text, border: `1px solid ${p.border}`, borderRadius: 5, padding: "6px 8px", fontSize: 12, fontFamily: "inherit", width: "100%", outline: "none", fontVariantNumeric: "tabular-nums" };
+  return (
+    <div>
+      <div style={lbl}>{label}{unit && <span style={{ color: p.copper, marginLeft: 4 }}>({unit})</span>}</div>
+      <input type={type} value={val} step={step} onChange={(e: any) => set(type === "number" ? +e.target.value : e.target.value)} style={iSty}/>
+    </div>
+  );
+}
+function SelField({ label, val, set, opts, p }: any) {
+  const lbl = { color: p.muted, fontSize: 10, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: 0.4 };
+  const iSty: any = { background: p.bg0, color: p.text, border: `1px solid ${p.border}`, borderRadius: 5, padding: "6px 8px", fontSize: 12, fontFamily: "inherit", width: "100%", outline: "none", fontVariantNumeric: "tabular-nums" };
+  return (
+    <div>
+      <div style={lbl}>{label}</div>
+      <select value={val} onChange={(e: any) => set(e.target.value)} style={iSty}>
+        {opts.map((o: any) => <option key={o.v} value={o.v}>{o.l}</option>)}
+      </select>
+    </div>
+  );
+}
+
+// ============================================================
 // COMPONENTE PRINCIPAL
 // ============================================================
 export default function TransportadorMod({ onSave, user, UI }: any) {
@@ -1184,20 +1210,6 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
   };
   const grid = (n: number) => ({ display: "grid", gridTemplateColumns: `repeat(${n}, 1fr)`, gap: 12 });
 
-  const F = ({ label, val, set, unit, step = 1, type = "number" }: any) => (
-    <div>
-      <div style={lbl}>{label}{unit && <span style={{ color: palette.copper, marginLeft: 4 }}>({unit})</span>}</div>
-      <input type={type} value={val} step={step} onChange={(e: any) => set(type === "number" ? +e.target.value : e.target.value)} style={inputSty}/>
-    </div>
-  );
-  const Sel = ({ label, val, set, opts }: any) => (
-    <div>
-      <div style={lbl}>{label}</div>
-      <select value={val} onChange={(e: any) => set(e.target.value)} style={inputSty}>
-        {opts.map((o: any) => <option key={o.v} value={o.v}>{o.l}</option>)}
-      </select>
-    </div>
-  );
 
   const tabs = [
     { l: "Material", i: 0 },
@@ -1302,12 +1314,12 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
           <div style={card}>
             <div style={cardTitle}>Material Transportado</div>
             <div style={grid(4)}>
-              <Sel label="Material" val={inp.mat_key} set={(v: any) => s("mat_key", v)}
+              <SelField p={palette} label="Material" val={inp.mat_key} set={(v: any) => s("mat_key", v)}
                 opts={Object.keys(MATERIAL_DB).map(k => ({ v: k, l: MATERIAL_DB[k].name }))}/>
-              <F label="Densidade" val={inp.mat_d} set={(v: any) => s("mat_d", v)} unit="kg/m³"/>
-              <F label="Capacidade" val={inp.cap_th} set={(v: any) => s("cap_th", v)} unit="t/h"/>
-              <F label="Surcharge angle Φs" val={inp.phi_s} set={(v: any) => s("phi_s", v)} unit="°"/>
-              <F label="Ângulo máx. transp." val={inp.phi_max_mat} set={(v: any) => s("phi_max_mat", v)} unit="°"/>
+              <FField p={palette} label="Densidade" val={inp.mat_d} set={(v: any) => s("mat_d", v)} unit="kg/m³"/>
+              <FField p={palette} label="Capacidade" val={inp.cap_th} set={(v: any) => s("cap_th", v)} unit="t/h"/>
+              <FField p={palette} label="Surcharge angle Φs" val={inp.phi_s} set={(v: any) => s("phi_s", v)} unit="°"/>
+              <FField p={palette} label="Ângulo máx. transp." val={inp.phi_max_mat} set={(v: any) => s("phi_max_mat", v)} unit="°"/>
             </div>
             <div style={{ marginTop: 14, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 11, color: palette.muted }}>
               <strong style={{ color: palette.copper }}>Φs (surcharge):</strong> ângulo formado pelo material em movimento sobre a correia.
@@ -1407,24 +1419,24 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
             <div style={card}>
               <div style={cardTitle}>Correia</div>
               <div style={grid(4)}>
-                <Sel label="Largura" val={inp.larg_pol} set={(v: any) => s("larg_pol", +v)}
+                <SelField p={palette} label="Largura" val={inp.larg_pol} set={(v: any) => s("larg_pol", +v)}
                   opts={BW_OPTIONS.map(b => ({ v: b, l: `${b}" (${(b * 25.4).toFixed(0)} mm)` }))}/>
-                <F label="Velocidade" val={inp.vel_ms} set={(v: any) => s("vel_ms", v)} unit="m/s" step={0.1}/>
-                <F label="Peso correia (Wb)" val={inp.Wb} set={(v: any) => s("Wb", v)} unit="kgf/m" step={0.1}/>
-                <F label="Ângulo rolete (λ)" val={inp.ang_rol} set={(v: any) => s("ang_rol", v)} unit="°"/>
-                <F label="Nº de lonas" val={inp.n_lonas} set={(v: any) => s("n_lonas", v)}/>
-                <F label="Resist. lonas" val={inp.cap_tens} set={(v: any) => s("cap_tens", v)} unit="N/m" step={100}/>
+                <FField p={palette} label="Velocidade" val={inp.vel_ms} set={(v: any) => s("vel_ms", v)} unit="m/s" step={0.1}/>
+                <FField p={palette} label="Peso correia (Wb)" val={inp.Wb} set={(v: any) => s("Wb", v)} unit="kgf/m" step={0.1}/>
+                <FField p={palette} label="Ângulo rolete (λ)" val={inp.ang_rol} set={(v: any) => s("ang_rol", v)} unit="°"/>
+                <FField p={palette} label="Nº de lonas" val={inp.n_lonas} set={(v: any) => s("n_lonas", v)}/>
+                <FField p={palette} label="Resist. lonas" val={inp.cap_tens} set={(v: any) => s("cap_tens", v)} unit="N/m" step={100}/>
               </div>
             </div>
             <div style={card}>
               <div style={cardTitle}>Roletes</div>
               <div style={grid(4)}>
-                <Sel label="Classe CEMA" val={inp.idler_cl} set={(v: any) => s("idler_cl", v)}
+                <SelField p={palette} label="Classe CEMA" val={inp.idler_cl} set={(v: any) => s("idler_cl", v)}
                   opts={Object.keys(IDLER_CLASS).map(k => ({ v: k, l: IDLER_CLASS[k].l }))}/>
-                <F label="Espaç. carga (Si)" val={inp.esp_rol} set={(v: any) => s("esp_rol", v)} unit="m" step={0.1}/>
-                <F label="Espaç. retorno" val={inp.esp_rol_ret} set={(v: any) => s("esp_rol_ret", v)} unit="m" step={0.1}/>
-                <F label="Peso rolete carga" val={inp.p_rol_carga} set={(v: any) => s("p_rol_carga", v)} unit="kgf"/>
-                <F label="Peso rolete retorno" val={inp.p_rol_ret} set={(v: any) => s("p_rol_ret", v)} unit="kgf"/>
+                <FField p={palette} label="Espaç. carga (Si)" val={inp.esp_rol} set={(v: any) => s("esp_rol", v)} unit="m" step={0.1}/>
+                <FField p={palette} label="Espaç. retorno" val={inp.esp_rol_ret} set={(v: any) => s("esp_rol_ret", v)} unit="m" step={0.1}/>
+                <FField p={palette} label="Peso rolete carga" val={inp.p_rol_carga} set={(v: any) => s("p_rol_carga", v)} unit="kgf"/>
+                <FField p={palette} label="Peso rolete retorno" val={inp.p_rol_ret} set={(v: any) => s("p_rol_ret", v)} unit="kgf"/>
               </div>
             </div>
             <div style={card}>
@@ -1440,9 +1452,9 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
             <div style={card}>
               <div style={cardTitle}>Tambor Motor (Cabeça)</div>
               <div style={grid(4)}>
-                <F label="Diâmetro" val={inp.d_tamb_mm} set={(v: any) => s("d_tamb_mm", v)} unit="mm"/>
-                <F label="Ângulo abraçamento" val={inp.ang_abr} set={(v: any) => s("ang_abr", v)} unit="°"/>
-                <F label="μ (atrito lagging)" val={inp.mu_lag} set={(v: any) => s("mu_lag", v)} step={0.05}/>
+                <FField p={palette} label="Diâmetro" val={inp.d_tamb_mm} set={(v: any) => s("d_tamb_mm", v)} unit="mm"/>
+                <FField p={palette} label="Ângulo abraçamento" val={inp.ang_abr} set={(v: any) => s("ang_abr", v)} unit="°"/>
+                <FField p={palette} label="μ (atrito lagging)" val={inp.mu_lag} set={(v: any) => s("mu_lag", v)} step={0.05}/>
               </div>
             </div>
             <div style={card}>
@@ -1583,22 +1595,22 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
             <div style={card}>
               <div style={cardTitle}>Motor Elétrico</div>
               <div style={grid(4)}>
-                <F label="Frequência" val={inp.freq_hz} set={(v: any) => s("freq_hz", v)} unit="Hz"/>
-                <F label="Polos" val={inp.n_polos} set={(v: any) => s("n_polos", v)}/>
-                <F label="Nº acionamentos" val={inp.n_ac} set={(v: any) => s("n_ac", v)}/>
-                <F label="η correias" val={inp.ef_c} set={(v: any) => s("ef_c", v)} step={0.01}/>
-                <F label="η redutor" val={inp.ef_r} set={(v: any) => s("ef_r", v)} step={0.01}/>
-                <F label="η acoplamento" val={inp.ef_a} set={(v: any) => s("ef_a", v)} step={0.01}/>
+                <FField p={palette} label="Frequência" val={inp.freq_hz} set={(v: any) => s("freq_hz", v)} unit="Hz"/>
+                <FField p={palette} label="Polos" val={inp.n_polos} set={(v: any) => s("n_polos", v)}/>
+                <FField p={palette} label="Nº acionamentos" val={inp.n_ac} set={(v: any) => s("n_ac", v)}/>
+                <FField p={palette} label="η correias" val={inp.ef_c} set={(v: any) => s("ef_c", v)} step={0.01}/>
+                <FField p={palette} label="η redutor" val={inp.ef_r} set={(v: any) => s("ef_r", v)} step={0.01}/>
+                <FField p={palette} label="η acoplamento" val={inp.ef_a} set={(v: any) => s("ef_a", v)} step={0.01}/>
               </div>
             </div>
             <div style={card}>
               <div style={cardTitle}>Acessórios (Resistências Adicionais)</div>
               <div style={grid(4)}>
-                <F label="Nº limpadores" val={inp.n_limp} set={(v: any) => s("n_limp", v)}/>
-                <F label="Comp. guias" val={inp.comp_guias} set={(v: any) => s("comp_guias", v)} unit="m"/>
-                <F label="Coef. skirt (Cs)" val={inp.Cs} set={(v: any) => s("Cs", v)} step={0.001}/>
-                <F label="Nº plows" val={inp.n_plows} set={(v: any) => s("n_plows", v)}/>
-                <F label="F por plow" val={inp.F_plow} set={(v: any) => s("F_plow", v)} unit="kgf"/>
+                <FField p={palette} label="Nº limpadores" val={inp.n_limp} set={(v: any) => s("n_limp", v)}/>
+                <FField p={palette} label="Comp. guias" val={inp.comp_guias} set={(v: any) => s("comp_guias", v)} unit="m"/>
+                <FField p={palette} label="Coef. skirt (Cs)" val={inp.Cs} set={(v: any) => s("Cs", v)} step={0.001}/>
+                <FField p={palette} label="Nº plows" val={inp.n_plows} set={(v: any) => s("n_plows", v)}/>
+                <FField p={palette} label="F por plow" val={inp.F_plow} set={(v: any) => s("F_plow", v)} unit="kgf"/>
               </div>
             </div>
           </>
