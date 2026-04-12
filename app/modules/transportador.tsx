@@ -201,25 +201,21 @@ function minRadius(T1_kgf: number, Wb: number, beta_deg: number) {
 // ============================================================
 // CÁLCULO PRINCIPAL — CEMA 7th Ed. com decomposição completa
 // ============================================================
-function calc(inp: any) {
+function calc(inp: any, pulleys: any[] = []) {
   const g = 9.81;
   const {
-    // Material
     mat_d, cap_th, phi_s,
-    // Geometria (multi-trecho)
-    segments, // [{comp:m, ang:°}]
-    // Correia
+    segments,
     larg_pol, ang_rol, vel_ms, Wb, n_lonas, cap_tens,
-    // Roletes
     esp_rol, esp_rol_ret, idler_cl, p_rol_carga, p_rol_ret,
-    // Tambor motor
     d_tamb_mm, ang_abr, mu_lag,
-    // Acessórios
     n_limp, comp_guias, Cs, n_plows, F_plow,
-    // Acionamento
     freq_hz, n_polos, n_ac, ef_c, ef_r, ef_a,
-    // Tensionamento
-    tens_type, // "gravity" | "screw" | "automatic"
+    tens_type,
+    // Dinâmico (novos)
+    Kst = 1.5, t_start = 8, t_brake = 10, a_brake = 0.3,
+    // Chute entupido (novos)
+    chute_plug = false, chute_area_m2 = 1.2, mat_shear_kpa = 35,
   } = inp;
 
   // ----- Geometria -----
@@ -286,10 +282,33 @@ function calc(inp: any) {
   const i_red = n_mot / n_tamb;
 
   // ----- Tensões T1, T2 -----
-  const wrap_r = ang_abr * Math.PI / 180;
+  // Ângulo de abraçamento real: 180° base + bônus de snub próximo ao motor
+  const drivePulley = pulleys.find(p => p.type === "drive");
+  const snubPulley = pulleys.find(p => p.type === "snub");
+  let ang_abr_real = ang_abr;
+  if (drivePulley && snubPulley) {
+    const dist = Math.abs(snubPulley.x - drivePulley.x);
+    // Quanto mais próximo o snub do motor, maior o wrap adicional (até +40°)
+    const bonus = dist < 5 ? 40 * (1 - dist / 5) : 0;
+    ang_abr_real = Math.min(240, ang_abr + bonus);
+  }
+  const wrap_r = ang_abr_real * Math.PI / 180;
   const Cw = Math.exp(mu_lag * wrap_r);
   const T1 = Te * Cw / (Cw - 1);
-  const T2 = T1 - Te;
+  const T2_min = T1 - Te;
+
+  // Posição do tensionamento afeta T2 efetivo
+  // Take-up próximo à cauda: T2 = T2_min (ideal)
+  // Take-up longe da cauda: T2 cresce ~5% por cada 10m de distância
+  const takeupPulley = pulleys.find(p => p.type === "takeup");
+  const tailPulley = pulleys.find(p => p.type === "tail");
+  let T2_factor = 1.0;
+  if (takeupPulley && tailPulley) {
+    const dist_tu = Math.abs(takeupPulley.x - tailPulley.x);
+    T2_factor = 1 + Math.min(dist_tu / 200, 0.15); // até +15%
+  }
+  const T2 = T2_min * T2_factor;
+  const T1_eff = T2 + Te;
   const Tad = (cap_tens * (larg_pol * 25.4) / 1000) / g;
 
   // ----- Sag (catenária mínima 2%) -----
@@ -344,7 +363,40 @@ function calc(inp: any) {
     });
   }
 
+  // ----- REGIME DE PARTIDA (CEMA 14.5) -----
+  const mass_belt_kg = Wb * L_total * 2;
+  const mass_mat_kg = Wm * L_total;
+  const mass_idlers_kg = (p_rol_carga / esp_rol + p_rol_ret / esp_rol_ret) * L_total;
+  const mass_total = mass_belt_kg + mass_mat_kg + mass_idlers_kg;
+  const a_start = V / t_start;
+  const Fi_start = mass_total * a_start;
+  const Te_start = Kst * Te + Fi_start;
+  const T1_start = Te_start * Cw / (Cw - 1);
+  const P_start_kw = Te_start * g * V / (1000 * ef_t);
+  const torque_peak_start = Te_start * (d_tamb_mm / 2000);
+  const start_ok = T1_start <= Tad;
+
+  // ----- REGIME DE FRENAGEM (CEMA 14.6) -----
+  const Fi_brake = mass_total * a_brake;
+  const Te_brake = Math.max(Math.abs(Te - Fi_brake), Te * 0.3);
+  const T1_brake = Te_brake * Cw / (Cw - 1);
+  const stop_distance = 0.5 * V * t_brake;
+  const brake_ok = T1_brake <= Tad;
+
+  // ----- CHUTE ENTUPIDO -----
+  const F_shear_plug = chute_plug ? (mat_shear_kpa * 1000 * chute_area_m2) / g : 0;
+  const Te_plug = Te + F_shear_plug;
+  const T1_plug = Te_plug * Cw / (Cw - 1);
+  const Te_start_plug = Kst * Te_plug + Fi_start;
+  const T1_start_plug = Te_start_plug * Cw / (Cw - 1);
+  const torque_peak_worst = Te_start_plug * (d_tamb_mm / 2000);
+  const plug_ok = T1_start_plug <= Tad;
+
   return {
+    ang_abr_real, T2_factor, T1_eff,
+    mass_total, a_start, Fi_start, Te_start, T1_start, P_start_kw, torque_peak_start, start_ok,
+    a_brake, Fi_brake, Te_brake, T1_brake, stop_distance, brake_ok,
+    F_shear_plug, Te_plug, T1_plug, Te_start_plug, T1_start_plug, torque_peak_worst, plug_ok,
     // Geometria
     L_total, L_h, H_total, beta_eq,
     // Material
@@ -411,6 +463,18 @@ function generateWarnings(inp: any, res: any) {
 
   if (res.radii.R_concave > 100) items.push({ level: "warn",
     text: `Raio mínimo de curva côncava elevado (${res.radii.R_concave.toFixed(0)} m). Verifique geometria do perfil.` });
+
+  if (res.start_ok === false) items.push({ level: "bad",
+    text: `Partida: T1 (${res.T1_start.toFixed(0)} kgf) excede Tad durante aceleração. Aumente t_start, reduza Kst ou use soft-starter/inversor.` });
+
+  if (res.brake_ok === false) items.push({ level: "bad",
+    text: `Frenagem: T1 (${res.T1_brake.toFixed(0)} kgf) excede Tad na desaceleração. Aumente t_brake ou reduza a_brake.` });
+
+  if (inp.chute_plug && !res.plug_ok) items.push({ level: "bad",
+    text: `Chute entupido + partida: T1 (${res.T1_start_plug.toFixed(0)} kgf) > Tad. Instalar detector de chute obstruído + intertravamento com acionamento.` });
+
+  if (inp.chute_plug && res.plug_ok) items.push({ level: "warn",
+    text: `Chute entupido considerado no dimensionamento. Torque de pico no acionamento: ${res.torque_peak_worst.toFixed(0)} N.m. Verifique se motor/redutor suportam.` });
 
   if (!items.length) items.push({ level: "ok",
     text: "Todos os critérios CEMA 7th Ed. atendidos. O transportador opera dentro dos limites recomendados." });
@@ -1047,6 +1111,10 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
     freq_hz: 60, n_polos: 4, n_ac: 2, ef_c: 0.94, ef_r: 0.94, ef_a: 0.96,
     // Tensionamento
     tens_type: "gravity",
+    // Dinâmico
+    Kst: 1.5, t_start: 8, t_brake: 10, a_brake: 0.3,
+    // Chute entupido
+    chute_plug: false, chute_area_m2: 1.2, mat_shear_kpa: 35,
   });
 
   const [pulleys, setPulleys] = useState<any[]>([
@@ -1064,10 +1132,10 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
 
   // Sincroniza tambores quando muda o comprimento total dos segmentos
   useEffect(() => {
-    setR(calc(inp));
+    setR(calc(inp, pulleys));
     const Ltot = inp.segments.reduce((a: number, sg: any) => a + sg.comp, 0);
     setPulleys(prev => prev.map(p => p.type === "drive" ? { ...p, x: Math.min(p.x, Ltot) } : p));
-  }, [inp]);
+  }, [inp, pulleys]);
 
   // Quando muda o material da DB, atualiza densidade etc
   useEffect(() => {
@@ -1138,6 +1206,7 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
     { l: "Tambores", i: 3 },
     { l: "Tensionamento", i: 4 },
     { l: "Acionamento", i: 5 },
+    { l: "Dinâmica / Chute", i: 11 },
     { l: "Resultados", i: 6 },
     { l: "2D Interativo", i: 7 },
     { l: "3D", i: 8 },
@@ -1589,7 +1658,26 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
         {/* === 2D INTERATIVO === */}
         {tab === 7 && (
           <div style={card}>
-            <div style={cardTitle}>Vista Lateral 2D — Editor Interativo</div>
+            <div style={cardTitle}>Vista Lateral 2D — Editor Interativo (realimenta cálculos)</div>
+            {res && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8, marginBottom: 12, padding: 10, background: palette.bg0, borderRadius: 6 }}>
+                {[
+                  { l: "θ real (c/ snub)", v: `${res.ang_abr_real.toFixed(0)}°`, c: palette.copper },
+                  { l: "Cw efetivo", v: res.Cw.toFixed(3), c: palette.text },
+                  { l: "T2 fator (tu)", v: res.T2_factor.toFixed(3), c: palette.warn },
+                  { l: "T1 resultante", v: `${res.T1.toFixed(0)} kgf`, c: res.tension_ok ? palette.ok : palette.bad },
+                  { l: "T2 resultante", v: `${res.T2.toFixed(0)} kgf`, c: palette.primary },
+                ].map((m, i) => (
+                  <div key={i} style={{ textAlign: "center" }}>
+                    <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase", fontWeight: 600 }}>{m.l}</div>
+                    <div style={{ fontSize: 14, color: m.c, fontWeight: 700, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ fontSize: 10, color: palette.muted, marginBottom: 8 }}>
+              ℹ Arraste os tambores: <strong>snub</strong> próximo ao motor aumenta θ (até +40°); <strong>tensionamento</strong> afastado da cauda aumenta T2 (até +15%). Os valores acima e os resultados em todas as abas são recalculados em tempo real.
+            </div>
             <InteractiveProfile2D inp={inp} res={res} palette={palette} pulleys={pulleys} setPulleys={setPulleys}/>
           </div>
         )}
@@ -1631,6 +1719,112 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
                   </div>
                 ))}
               </div>
+            </div>
+          </>
+        )}
+
+        {/* === DINÂMICA / CHUTE === */}
+        {tab === 11 && (
+          <>
+            <div style={card}>
+              <div style={cardTitle}>Parâmetros de Partida e Frenagem (CEMA 14.5/14.6)</div>
+              <div style={grid(4)}>
+                <F label="Fator de partida Kst" val={inp.Kst} set={(v: any) => s("Kst", v)} step={0.1}/>
+                <F label="Tempo de partida" val={inp.t_start} set={(v: any) => s("t_start", v)} unit="s"/>
+                <F label="Tempo de frenagem" val={inp.t_brake} set={(v: any) => s("t_brake", v)} unit="s"/>
+                <F label="Desacel. frenagem" val={inp.a_brake} set={(v: any) => s("a_brake", v)} unit="m/s²" step={0.05}/>
+              </div>
+              <div style={{ marginTop: 12, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 10, color: palette.muted }}>
+                <strong style={{ color: palette.copper }}>Kst:</strong> típico 1.3 (partida suave) a 1.8 (partida direta). Regula o pico de Te na aceleração.<br/>
+                <strong style={{ color: palette.copper }}>t_start:</strong> tempo para atingir velocidade nominal. Maior = menor pico.<br/>
+                <strong style={{ color: palette.copper }}>a_brake:</strong> CEMA recomenda 0.2–0.5 m/s² para cargas normais; inferior a 0.3 para transportadores inclinados descendentes.
+              </div>
+            </div>
+
+            {res && (
+              <div style={card}>
+                <div style={cardTitle}>Regime de Partida</div>
+                <div style={{ ...grid(4), marginBottom: 10 }}>
+                  {[
+                    { l: "Massa total inercial", v: res.mass_total.toFixed(0), u: "kg" },
+                    { l: "Aceleração", v: res.a_start.toFixed(3), u: "m/s²" },
+                    { l: "Força inercial Fi", v: res.Fi_start.toFixed(0), u: "kgf" },
+                    { l: "Te partida", v: res.Te_start.toFixed(0), u: "kgf", c: palette.warn },
+                    { l: "T1 partida", v: res.T1_start.toFixed(0), u: "kgf", c: res.start_ok ? palette.ok : palette.bad },
+                    { l: "Potência pico", v: res.P_start_kw.toFixed(1), u: "kW", c: palette.copper },
+                    { l: "Torque pico (tambor)", v: res.torque_peak_start.toFixed(0), u: "N.m", c: palette.copper },
+                    { l: "Status", v: res.start_ok ? "OK" : "EXCEDE Tad", u: "", c: res.start_ok ? palette.ok : palette.bad },
+                  ].map((m, i) => (
+                    <div key={i} style={{ background: palette.bg0, borderLeft: `3px solid ${m.c || palette.text}`, borderRadius: 5, padding: "8px 10px" }}>
+                      <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" }}>{m.l}</div>
+                      <div style={{ fontSize: 14, color: m.c || palette.text, fontWeight: 700, marginTop: 2 }}>{m.v}</div>
+                      <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {res && (
+              <div style={card}>
+                <div style={cardTitle}>Regime de Frenagem</div>
+                <div style={grid(4)}>
+                  {[
+                    { l: "Te frenagem", v: res.Te_brake.toFixed(0), u: "kgf" },
+                    { l: "T1 frenagem", v: res.T1_brake.toFixed(0), u: "kgf", c: res.brake_ok ? palette.ok : palette.bad },
+                    { l: "Distância parada", v: res.stop_distance.toFixed(1), u: "m" },
+                    { l: "Status", v: res.brake_ok ? "OK" : "EXCEDE Tad", u: "", c: res.brake_ok ? palette.ok : palette.bad },
+                  ].map((m, i) => (
+                    <div key={i} style={{ background: palette.bg0, borderLeft: `3px solid ${m.c || palette.text}`, borderRadius: 5, padding: "8px 10px" }}>
+                      <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" }}>{m.l}</div>
+                      <div style={{ fontSize: 14, color: m.c || palette.text, fontWeight: 700, marginTop: 2 }}>{m.v}</div>
+                      <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={card}>
+              <div style={cardTitle}>Chute Entupido (Plugged Chute) — Cisalhamento do Material</div>
+              <div style={{ marginBottom: 14, display: "flex", gap: 12, alignItems: "center" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                  <input type="checkbox" checked={inp.chute_plug} onChange={(e: any) => s("chute_plug", e.target.checked)}/>
+                  <span style={{ color: palette.text, fontSize: 12, fontWeight: 600 }}>Simular chute entupido</span>
+                </label>
+              </div>
+              <div style={grid(4)}>
+                <F label="Área contato chute" val={inp.chute_area_m2} set={(v: any) => s("chute_area_m2", v)} unit="m²" step={0.1}/>
+                <F label="Cisalhamento τ material" val={inp.mat_shear_kpa} set={(v: any) => s("mat_shear_kpa", v)} unit="kPa"/>
+              </div>
+              <div style={{ marginTop: 12, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 10, color: palette.muted }}>
+                <strong style={{ color: palette.copper }}>τ típicos:</strong> minério de ferro 30-50 kPa, carvão 15-25 kPa, calcário 20-40 kPa.<br/>
+                Força de cisalhamento: <em>F = τ · A</em> — aparece como carga adicional em Te se a correia for energizada com o chute obstruído.
+              </div>
+
+              {res && inp.chute_plug && (
+                <div style={{ marginTop: 14, padding: 14, background: palette.bg0, borderRadius: 6, borderLeft: `4px solid ${palette.bad}` }}>
+                  <div style={{ fontSize: 11, color: palette.bad, fontWeight: 700, textTransform: "uppercase", marginBottom: 10 }}>⚠ Pior Caso: Partida com Chute Entupido</div>
+                  <div style={grid(4)}>
+                    {[
+                      { l: "F cisalhamento", v: res.F_shear_plug.toFixed(0), u: "kgf" },
+                      { l: "Te com chute", v: res.Te_plug.toFixed(0), u: "kgf" },
+                      { l: "Te partida+chute", v: res.Te_start_plug.toFixed(0), u: "kgf", c: palette.warn },
+                      { l: "T1 pior caso", v: res.T1_start_plug.toFixed(0), u: "kgf", c: res.plug_ok ? palette.ok : palette.bad },
+                      { l: "Torque pico tambor", v: res.torque_peak_worst.toFixed(0), u: "N.m", c: palette.copper },
+                      { l: "Tad admissível", v: res.Tad.toFixed(0), u: "kgf" },
+                      { l: "Margem", v: ((res.Tad - res.T1_start_plug) / res.Tad * 100).toFixed(1), u: "%", c: res.plug_ok ? palette.ok : palette.bad },
+                      { l: "Status", v: res.plug_ok ? "APROVADO" : "REPROVADO", u: "", c: res.plug_ok ? palette.ok : palette.bad },
+                    ].map((m, i) => (
+                      <div key={i} style={{ background: palette.bg1, borderLeft: `3px solid ${m.c || palette.text}`, borderRadius: 5, padding: "8px 10px" }}>
+                        <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" }}>{m.l}</div>
+                        <div style={{ fontSize: 14, color: m.c || palette.text, fontWeight: 700, marginTop: 2 }}>{m.v}</div>
+                        <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </>
         )}
