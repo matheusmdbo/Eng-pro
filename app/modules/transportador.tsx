@@ -1797,6 +1797,55 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
         {tab === 6 && res && (
           <>
             <div style={card}>
+              <div style={cardTitle}>Fatores de Segurança — Síntese</div>
+              <div style={grid(4)}>
+                {[
+                  { l: "SF Correia (T1)", v: res.SF_T1.toFixed(2), u: "Tad/T1", c: res.SF_T1 >= 1.2 ? palette.ok : palette.bad },
+                  { l: "SF Correia (belt)", v: res.SF_belt_actual.toFixed(2), u: "real", c: res.belt_ok ? palette.ok : palette.bad },
+                  { l: "SF std mín. CEMA", v: res.SF_belt_std.toFixed(2), u: "req.", c: palette.muted },
+                  { l: "L10 min roletes", v: res.L10_min >= 1e6 ? (res.L10_min / 1e6).toFixed(2) + "M" : res.L10_min.toFixed(0), u: "h", c: res.L10_min >= 50000 ? palette.ok : res.L10_min >= 20000 ? palette.warn : palette.bad },
+                ].map((m, i) => (
+                  <div key={i} style={{ background: palette.bg0, borderLeft: `3px solid ${m.c}`, borderRadius: 5, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" as const }}>{m.l}</div>
+                    <div style={{ fontSize: 18, color: m.c, fontWeight: 700, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
+                    <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 14, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 11, color: palette.muted }}>
+                <strong style={{ color: palette.copper }}>Comprimento de Transição:</strong> distância mínima para a correia passar de plana para a calha (λ = {inp.ang_rol}°) — <strong style={{ color: palette.text }}>{res.transition_L.toFixed(2)} m</strong>
+              </div>
+            </div>
+            <div style={card}>
+              <div style={cardTitle}>Tensões por Junção (entre trechos)</div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${palette.border}` }}>
+                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Junção</th>
+                    <th style={{ ...lbl, textAlign: "right", padding: 8 }}>Posição (m)</th>
+                    <th style={{ ...lbl, textAlign: "right", padding: 8 }}>Elevação (m)</th>
+                    <th style={{ ...lbl, textAlign: "right", padding: 8 }}>Tensão T (kgf)</th>
+                    <th style={{ ...lbl, textAlign: "right", padding: 8 }}>% de Tad</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {res.junctions.map((j: any, i: number) => {
+                    const pct = (j.T / res.Tad) * 100;
+                    const c = pct > 100 ? palette.bad : pct > 80 ? palette.warn : palette.ok;
+                    return (
+                      <tr key={i} style={{ borderBottom: `1px solid ${palette.border}` }}>
+                        <td style={{ padding: "7px 8px", color: palette.copper, fontWeight: 700 }}>{i === 0 ? "Cauda (T2)" : `Junção ${j.seg}`}</td>
+                        <td style={{ padding: "7px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{j.x}</td>
+                        <td style={{ padding: "7px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{j.h}</td>
+                        <td style={{ padding: "7px 8px", textAlign: "right", fontWeight: 700, color: c, fontVariantNumeric: "tabular-nums" }}>{j.T}</td>
+                        <td style={{ padding: "7px 8px", textAlign: "right", color: c, fontVariantNumeric: "tabular-nums" }}>{pct.toFixed(1)}%</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={card}>
               <div style={cardTitle}>Resistências CEMA — Decomposição</div>
               <ResistanceBars res={res} palette={palette}/>
             </div>
@@ -2038,6 +2087,148 @@ export default function TransportadorMod({ onSave, user, UI }: any) {
               })}
             </div>
           </div>
+        )}
+
+        {/* === SELEÇÃO DE CORREIA === */}
+        {tab === 12 && res && (
+          <>
+            <div style={card}>
+              <div style={cardTitle}>Parâmetros de Seleção de Correia</div>
+              <div style={grid(4)}>
+                {[
+                  { l: "T1 efetivo", v: res.T1_eff.toFixed(0), u: "kgf" },
+                  { l: "T1 por mm de largura", v: res.T1_N_per_mm.toFixed(2), u: "N/mm" },
+                  { l: "Rating mínimo requerido", v: res.belt_rating_req.toFixed(0), u: "N/mm" },
+                  { l: "SF padrão CEMA", v: res.SF_belt_std.toFixed(2), u: "-" },
+                  { l: "SF real (correia atual)", v: res.SF_belt_actual.toFixed(2), u: "-", c: res.belt_ok ? palette.ok : palette.bad },
+                  { l: "Velocidade atual", v: res.V.toFixed(2), u: "m/s" },
+                  { l: "Largura correia", v: `${inp.larg_pol}" (${(inp.larg_pol * 25.4).toFixed(0)} mm)`, u: "" },
+                  { l: "Resist. lonas atual", v: inp.cap_tens.toFixed(0), u: "N/m" },
+                ].map((m, i) => (
+                  <div key={i} style={{ background: palette.bg0, borderLeft: `3px solid ${m.c || palette.primary}`, borderRadius: 5, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" as const }}>{m.l}</div>
+                    <div style={{ fontSize: 14, color: m.c || palette.text, fontWeight: 700, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
+                    <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={card}>
+              <div style={cardTitle}>Catálogo de Correias — CEMA / NBR</div>
+              <div style={{ marginBottom: 10, fontSize: 11, color: palette.muted }}>
+                Rating em N/mm (= kN/m). Verde = atende ao SF mínimo ({res.SF_belt_std.toFixed(2)}x). Primeira correia adequada destacada.
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead>
+                  <tr style={{ borderBottom: `2px solid ${palette.border}` }}>
+                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Tipo</th>
+                    <th style={{ ...lbl, textAlign: "right", padding: 8 }}>Rating (N/mm)</th>
+                    <th style={{ ...lbl, textAlign: "right", padding: 8 }}>Req. mín. (N/mm)</th>
+                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Cobertura (mm)</th>
+                    <th style={{ ...lbl, textAlign: "right", padding: 8 }}>Vel. máx (m/s)</th>
+                    <th style={{ ...lbl, textAlign: "center", padding: 8 }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    let firstAdequate = true;
+                    return BELT_CATALOG.map((belt, i) => {
+                      const adequate = belt.rating >= res.belt_rating_req && belt.max_vel >= res.V;
+                      const isFirst = adequate && firstAdequate;
+                      if (isFirst) firstAdequate = false;
+                      const rowBg = isFirst ? `${palette.ok}22` : "transparent";
+                      const statusC = adequate ? palette.ok : palette.bad;
+                      const statusTxt = adequate ? "OK" : "INSUFICIENTE";
+                      return (
+                        <tr key={i} style={{ borderBottom: `1px solid ${palette.border}`, background: rowBg }}>
+                          <td style={{ padding: "7px 8px", color: isFirst ? palette.ok : belt.st ? palette.copper : palette.text, fontWeight: isFirst ? 800 : 600 }}>
+                            {isFirst ? ">> " : ""}{belt.type}
+                          </td>
+                          <td style={{ padding: "7px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: adequate ? palette.ok : palette.bad, fontWeight: 700 }}>{belt.rating}</td>
+                          <td style={{ padding: "7px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: palette.muted }}>{res.belt_rating_req.toFixed(0)}</td>
+                          <td style={{ padding: "7px 8px", color: palette.muted }}>{belt.cover}</td>
+                          <td style={{ padding: "7px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: belt.max_vel >= res.V ? palette.text : palette.bad }}>{belt.max_vel.toFixed(1)}</td>
+                          <td style={{ padding: "7px 8px", textAlign: "center" }}>
+                            <span style={{ background: `${statusC}22`, color: statusC, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>{statusTxt}</span>
+                          </td>
+                        </tr>
+                      );
+                    });
+                  })()}
+                </tbody>
+              </table>
+              <div style={{ marginTop: 12, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 11, color: palette.muted }}>
+                <strong style={{ color: palette.copper }}>SF mínimo CEMA (têxtil):</strong> 6.67 (correias EP). Para correias de aço (ST), SF recomendado pode ser 5.0–6.0 conforme fabricante.<br/>
+                <strong style={{ color: palette.copper }}>Nota:</strong> o rating indicado é a resistência nominal por largura unitária. A tensão admissível real = rating × largura.
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* === VIDA DOS ROLETES === */}
+        {tab === 13 && res && (
+          <>
+            <div style={card}>
+              <div style={cardTitle}>Parâmetros dos Roletes</div>
+              <div style={grid(4)}>
+                {[
+                  { l: "Classe CEMA", v: inp.idler_cl, u: "" },
+                  { l: "Diâm. do rolo", v: `${inp.d_idler_mm} mm`, u: "" },
+                  { l: "Capacidade dyn. C", v: res.C_brg.toFixed(0), u: "N" },
+                  { l: "Rotação do rolo", v: res.n_roll.toFixed(1), u: "rpm" },
+                  { l: "Carga/rolamento (carga)", v: res.F_l_carga_N.toFixed(0), u: "N" },
+                  { l: "Carga/rolamento (retorno)", v: res.F_l_ret_N.toFixed(0), u: "N" },
+                  { l: "Espaç. roletes carga", v: inp.esp_rol.toFixed(2), u: "m" },
+                  { l: "Espaç. roletes retorno", v: inp.esp_rol_ret.toFixed(2), u: "m" },
+                ].map((m, i) => (
+                  <div key={i} style={{ background: palette.bg0, borderLeft: `3px solid ${palette.primary}`, borderRadius: 5, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" as const }}>{m.l}</div>
+                    <div style={{ fontSize: 14, color: palette.text, fontWeight: 700, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
+                    <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={card}>
+              <div style={cardTitle}>Vida L10 dos Rolamentos (CEMA Cap. 11)</div>
+              <div style={grid(3)}>
+                {[
+                  { l: "L10 ramal de carga", v: res.L10_carga >= 1e6 ? (res.L10_carga / 1e6).toFixed(2) + "M h" : res.L10_carga.toFixed(0) + " h", c: res.L10_carga >= 50000 ? palette.ok : res.L10_carga >= 20000 ? palette.warn : palette.bad },
+                  { l: "L10 ramal de retorno", v: res.L10_ret >= 1e6 ? (res.L10_ret / 1e6).toFixed(2) + "M h" : res.L10_ret.toFixed(0) + " h", c: res.L10_ret >= 50000 ? palette.ok : res.L10_ret >= 20000 ? palette.warn : palette.bad },
+                  { l: "L10 crítico (mínimo)", v: res.L10_min >= 1e6 ? (res.L10_min / 1e6).toFixed(2) + "M h" : res.L10_min.toFixed(0) + " h", c: res.L10_min >= 50000 ? palette.ok : res.L10_min >= 20000 ? palette.warn : palette.bad },
+                ].map((m, i) => (
+                  <div key={i} style={{ background: palette.bg0, borderLeft: `3px solid ${m.c}`, borderRadius: 5, padding: "12px 14px" }}>
+                    <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" as const }}>{m.l}</div>
+                    <div style={{ fontSize: 22, color: m.c, fontWeight: 700, marginTop: 4, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 16, padding: 14, background: palette.bg0, borderRadius: 6 }}>
+                <div style={{ ...lbl, marginBottom: 10 }}>Vida em operação (24 h/dia)</div>
+                <div style={grid(3)}>
+                  {[
+                    { l: "Dias (carga)", v: (res.L10_carga / 24).toFixed(0), u: "dias" },
+                    { l: "Dias (retorno)", v: (res.L10_ret / 24).toFixed(0), u: "dias" },
+                    { l: "Anos (L10 crítico)", v: (res.L10_min / (24 * 365)).toFixed(2), u: "anos" },
+                  ].map((m, i) => (
+                    <div key={i} style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" as const }}>{m.l}</div>
+                      <div style={{ fontSize: 18, color: palette.copper, fontWeight: 700, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
+                      <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{ marginTop: 14, padding: 12, background: palette.bg0, borderRadius: 6, borderLeft: `4px solid ${res.L10_min >= 50000 ? palette.ok : res.L10_min >= 20000 ? palette.warn : palette.bad}`, fontSize: 11, color: palette.muted, lineHeight: 1.7 }}>
+                <strong style={{ color: palette.copper }}>Recomendação CEMA:</strong> L10 mínimo recomendado para operação contínua (24h/dia) é de <strong>50.000 h</strong> (≈ 5.7 anos).
+                {res.L10_min < 20000 && <span style={{ color: palette.bad }}> ATENÇÃO: vida muito baixa. Considere aumentar a classe dos roletes, reduzir o espaçamento ou diminuir a carga.</span>}
+                {res.L10_min >= 20000 && res.L10_min < 50000 && <span style={{ color: palette.warn }}> Vida abaixo do ideal. Avalie plano de manutenção preventiva com troca de roletes.</span>}
+                {res.L10_min >= 50000 && <span style={{ color: palette.ok }}> Vida adequada para operação contínua.</span>}
+                <br/>
+                <strong style={{ color: palette.copper }}>Fórmula L10:</strong> L10 = (C/F)³ × (16667 / n_rpm)  — onde C = capacidade dinâmica do rolamento (N), F = força radial por rolamento (N), n = rotação do rolo (rpm).
+              </div>
+            </div>
+          </>
         )}
 
       </div>
