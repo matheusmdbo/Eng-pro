@@ -12,6 +12,7 @@ import TranslacaoMod, { CONFIG as translacaoCfg, GLOSSARY as translacaoGloss } f
 import ElevacaoMod, { CONFIG as elevacaoCfg, GLOSSARY as elevacaoGloss } from "../modules/elevacao";
 import GiroMod, { CONFIG as giroCfg, GLOSSARY as giroGloss } from "../modules/giro";
 import RodaCacambaMod, { CONFIG as rodaCfg, GLOSSARY as rodaGloss } from "../modules/roda_cacamba";
+import Conveyor2Mod, { CONFIG as conv2Cfg, GLOSSARY as conv2Gloss } from "../modules/conveyor2";
 
 // REGISTRO DE MÓDULOS
 export const MODULES = [
@@ -23,6 +24,7 @@ export const MODULES = [
   { ...elevacaoCfg, Component: ElevacaoMod, glossary: elevacaoGloss },
   { ...giroCfg, Component: GiroMod, glossary: giroGloss },
   { ...rodaCfg, Component: RodaCacambaMod, glossary: rodaGloss },
+  { ...conv2Cfg, Component: Conveyor2Mod, glossary: conv2Gloss },
 ];
 
 // CORES E ESTILOS
