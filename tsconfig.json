@@ -19,7 +19,8 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "@engine/cema7": ["./src/engine/conveyor-cema7/index.ts"]
     }
   },
   "include": [
