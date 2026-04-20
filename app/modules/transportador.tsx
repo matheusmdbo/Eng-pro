@@ -1,2269 +1,1669 @@
-// app/modules/transportador.tsx
-// ============================================================
-// MÓDULO: TRANSPORTADOR DE CORREIA — CEMA 7th Edition (Expanded)
-// Inspirado em Belt Analyst (Overland Conveyor Co.)
-// Recursos: multi-trecho, área de enchimento, curvas côncava/convexa,
-// editor visual 2D com tambores arrastáveis, 3 tipos de tensionamento,
-// análise completa de resistências CEMA, ângulos máx/mín por material
-// ============================================================
-"use client";
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+'use client';
 
-export const CONFIG = {
-  id: "transportador",
-  name: "Transportador de Correia",
-  subtitle: "CEMA 7th Ed. — Análise Completa",
-  icon: "↗",
-  color: "#0a9396",
-  price: 299.90,
-  description:
-    "Dimensionamento completo de transportador de correia conforme CEMA 7th Edition. Multi-trecho com curvas côncava/convexa, análise de área de enchimento por seção, ângulos máximos/mínimos por material, 3 tipos de tensionamento (gravidade, parafuso, automático), editor visual interativo com tambores arrastáveis em 2D/3D, decomposição completa de resistências (Tx, Ty, Tyc, Tyr, Tac, Tbc, Tpl, Tam), perfil de tensão ao longo da correia, verificação T1≤Tad, sag mínimo, raio mínimo de curvas, e potência por acionamento.",
-  norma: "CEMA 7th Ed. · ISO 5048 · DIN 22101",
+/**
+ * ConveyorCalculator.tsx
+ * CEMA 7th Edition — Belt Conveyor Power Worksheet
+ *
+ * Arquivo TSX único autocontido. Contém:
+ *  - Toda a lógica de cálculo (engine CEMA 7 Historical Method)
+ *  - Todos os dados de tabelas (Ai, beltWeight, available area, Ky, Kt, Cs)
+ *  - Todos os renderizadores SVG (esquemático 2D, breakdown, fill, fill curve,
+ *    traction, profile editor)
+ *  - Todos os inputs, outputs, validação e base de cálculo
+ *  - Suporte a tema claro/escuro
+ *  - Persistência via localStorage
+ *
+ * Uso no Next.js App Router:
+ *   import { ConveyorCalculator } from './ConveyorCalculator';
+ *   export default function Page() { return <ConveyorCalculator />; }
+ */
+
+import React, {
+  useState, useReducer, useEffect, useRef, useCallback, useMemo,
+} from 'react';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 1 — CONSTANTS & UNIT CONVERSIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FT_PER_M = 3.280839895013123;
+const FPM_PER_MPS = 196.8503937007874;
+const LBFT_PER_KGPM = 2.204622621848776 / FT_PER_M;
+const KGPM_PER_LBFT = 1 / LBFT_PER_KGPM;
+const SHORT_TON_PER_METRIC_TON = 1.102311310924388;
+const HP_TO_KW = 0.7456998715822702;
+const LBF_TO_N = 4.4482216152605;
+const IN_PER_MM = 1 / 25.4;
+const LBFT3_PER_TM3 = 62.4279605761;
+const G_MPS2 = 9.80665;
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+const lbfToKn = (lbf: number) => (lbf * LBF_TO_N) / 1000;
+const knToLbf = (kn: number) => (kn * 1000) / LBF_TO_N;
+const hpFromTeV = (teLbf: number, vFpm: number) => (teLbf * vFpm) / 33000;
+const componentKwFromLbf = (lbf: number, vFpm: number) => hpFromTeV(lbf, vFpm) * HP_TO_KW;
+const kgpmToLbft = (kgpm: number) => kgpm * LBFT_PER_KGPM;
+const fmt = (v: number, d = 2) =>
+  Number.isFinite(v) ? v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—';
+const fmtFixed = (v: number, d = 2) =>
+  Number.isFinite(v) ? v.toFixed(d) : '—';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 2 — LOOKUP TABLES
+// ─────────────────────────────────────────────────────────────────────────────
+
+const IDLER_FAMILIES = [
+  { id: 'B4_C4_4in',      label: 'B4 / C4 · 4 in idlers',     ai: 2.3 },
+  { id: 'B5_C5_D5_5in',   label: 'B5 / C5 / D5 · 5 in idlers', ai: 1.8 },
+  { id: 'D5_5in',         label: 'D5 · 5 in idlers',           ai: 1.8 },
+  { id: 'C6_D6_6in',      label: 'C6 / D6 · 6 in idlers',     ai: 1.5 },
+  { id: 'D6_6in',         label: 'D6 · 6 in idlers',           ai: 1.5 },
+  { id: 'E7_7in',         label: 'E7 · 7 in idlers',           ai: 2.4 },
+  { id: 'E6_6in',         label: 'E6 · 6 in idlers',           ai: 2.8 },
+] as const;
+
+const CW_PRESETS = [
+  { id: 'manual',              label: 'Manual entry',                                      value: null },
+  { id: 'lagged180gravity',    label: 'Lagged pulley · 180° wrap · gravity take-up',       value: 0.50 },
+  { id: 'lagged220',           label: 'Lagged pulley · about 220° wrap',                   value: 0.35 },
+  { id: 'dual380lagged',       label: 'Dual drive · about 380° total wrap · lagged',       value: 0.11 },
+  { id: 'conservativeSingle',  label: 'Conservative single drive / manual take-up',        value: 1.20 },
+] as const;
+
+const PLUGGED_MODES = [
+  { id: 'off',    label: 'Off' },
+  { id: 'shear',  label: 'Shear + wall friction method' },
+  { id: 'manual', label: 'Manual force entry' },
+] as const;
+
+const TROUGH_ANGLES = [0, 15, 35, 45] as const;
+const SAG_OPTIONS = [3, 2, 1.5] as const;
+
+const BELT_WEIGHT_TABLE = {
+  widthsIn: [18, 24, 30, 36, 42, 48, 54, 60, 72, 84, 96],
+  low:    [3.5, 4.5, 6.0,  9.0, 11.0, 14.0, 16.0, 18.0, 21.0, 25.0, 30.0],
+  medium: [4.0, 5.5, 7.0, 10.0, 12.0, 15.0, 17.0, 20.0, 24.0, 30.0, 35.0],
+  high:   [4.5, 6.0, 8.0, 12.0, 14.0, 17.0, 19.0, 22.0, 26.0, 33.0, 38.0],
 };
 
-export const GLOSSARY = [
-  { cat: "MATERIAL", items: [
-    { s: "ρ", d: "Densidade aparente do material", u: "kg/m³" },
-    { s: "Q", d: "Capacidade requerida (vazão mássica)", u: "t/h" },
-    { s: "Φs", d: "Surcharge angle (ângulo de sobrecarga)", u: "°" },
-    { s: "Φr", d: "Repose angle (ângulo de repouso)", u: "°" },
-    { s: "Φm", d: "Ângulo máx. de transporte (material)", u: "°" },
-  ]},
-  { cat: "GEOMETRIA / PERFIL", items: [
-    { s: "L", d: "Comprimento total horizontal projetado", u: "m" },
-    { s: "H", d: "Elevação total (cauda → cabeça)", u: "m" },
-    { s: "βi", d: "Ângulo de inclinação do trecho i", u: "°" },
-    { s: "Li", d: "Comprimento do trecho i (real)", u: "m" },
-    { s: "Rcv/Rcc", d: "Raio mín. curva convexa/côncava", u: "m" },
-  ]},
-  { cat: "CORREIA E ROLETES", items: [
-    { s: "B", d: "Largura da correia", u: "pol / mm" },
-    { s: "v", d: "Velocidade da correia", u: "m/s" },
-    { s: "Wb", d: "Peso por metro da correia", u: "kgf/m" },
-    { s: "λ", d: "Ângulo do rolete lateral (trough angle)", u: "°" },
-    { s: "Si", d: "Espaçamento dos roletes de carga", u: "m" },
-    { s: "Sir", d: "Espaçamento dos roletes de retorno", u: "m" },
-    { s: "Au", d: "Área de enchimento útil (seção)", u: "m²" },
-    { s: "Au_max", d: "Área de enchimento máxima teórica (CEMA)", u: "m²" },
-    { s: "Ku", d: "Fator de utilização (Au/Au_max)", u: "-" },
-    { s: "Wm", d: "Peso por metro do material", u: "kgf/m" },
-  ]},
-  { cat: "RESISTÊNCIAS CEMA", items: [
-    { s: "Tx", d: "Resistência por flexão dos roletes (idlers)", u: "kgf" },
-    { s: "Ty", d: "Resistência por flexão da correia", u: "kgf" },
-    { s: "Tyc", d: "Resistência por flexão do material", u: "kgf" },
-    { s: "Tyr", d: "Resistência por flexão correia (retorno)", u: "kgf" },
-    { s: "Tm", d: "Resistência por elevação do material", u: "kgf" },
-    { s: "Tb", d: "Resistência por elevação da correia", u: "kgf" },
-    { s: "Tac", d: "Resistência por acessórios (skirts, plows)", u: "kgf" },
-    { s: "Tbc", d: "Resistência dos limpadores (belt cleaners)", u: "kgf" },
-    { s: "Tpl", d: "Resistência dos plows (raspadores)", u: "kgf" },
-    { s: "Tsb", d: "Resistência dos skirtboards (guias laterais)", u: "kgf" },
-    { s: "Te", d: "Tensão efetiva total (sum dos T's)", u: "kgf" },
-  ]},
-  { cat: "TENSIONAMENTO E TAMBORES", items: [
-    { s: "θ", d: "Ângulo de abraçamento no tambor motor", u: "°" },
-    { s: "μ", d: "Coef. de atrito correia–tambor (lagging)", u: "-" },
-    { s: "Cw", d: "Fator de wrap (Euler) = e^(μθ)", u: "-" },
-    { s: "T1", d: "Tensão no lado tenso (entrada do tambor motor)", u: "kgf" },
-    { s: "T2", d: "Tensão no lado frouxo (saída do tambor motor)", u: "kgf" },
-    { s: "Tad", d: "Tensão admissível da correia (lonas × resistência)", u: "kgf" },
-    { s: "Tsag", d: "Tensão mínima por sag (catenária ≤ 2%)", u: "kgf" },
-    { s: "Wcp", d: "Peso do contrapeso (gravidade)", u: "kgf" },
-  ]},
-  { cat: "ACIONAMENTO", items: [
-    { s: "P_motor", d: "Potência por motor", u: "kW / HP" },
-    { s: "n_mot", d: "Rotação do motor", u: "rpm" },
-    { s: "n_tamb", d: "Rotação do tambor motor", u: "rpm" },
-    { s: "i_red", d: "Relação de redução", u: "-" },
-    { s: "η", d: "Rendimento total (motor·redutor·acopl.)", u: "-" },
-  ]},
+const CEMA_AVAILABLE_AREA: Record<number, Record<number, number>> = {
+  0:  { 18:0.0097, 24:0.0180, 30:0.0290, 36:0.0426, 42:0.0587, 48:0.0774, 54:0.0987, 60:0.1226, 72:0.1781, 84:0.2439, 96:0.3202 },
+  15: { 18:0.0178, 24:0.0329, 30:0.0531, 36:0.0780, 42:0.1075, 48:0.1418, 54:0.1808, 60:0.2245, 72:0.3263, 84:0.4468, 96:0.5868 },
+  35: { 18:0.0279, 24:0.0516, 30:0.0833, 36:0.1223, 42:0.1686, 48:0.2224, 54:0.2836, 60:0.3522, 72:0.5119, 84:0.7010, 96:0.9204 },
+  45: { 18:0.0310, 24:0.0574, 30:0.0925, 36:0.1358, 42:0.1871, 48:0.2468, 54:0.3147, 60:0.3906, 72:0.5681, 84:0.7776, 96:1.0214 },
+};
+
+const BELT_SECTION_GEOMETRY: Record<number, { centerFrac: number }> = {
+  0: { centerFrac: 0.58 }, 15: { centerFrac: 0.61 },
+  35: { centerFrac: 0.66 }, 45: { centerFrac: 0.69 },
+};
+
+// Kt temperature correction curve (CEMA, digitized in °F)
+const KT_CURVE = [
+  { tF: -40, kt: 1.65 }, { tF: -20, kt: 1.45 }, { tF: 0, kt: 1.27 },
+  { tF: 20, kt: 1.14 }, { tF: 40, kt: 1.05 }, { tF: 60, kt: 1.00 }, { tF: 120, kt: 1.00 },
 ];
 
-// ============================================================
-// CONSTANTES CEMA 7th Ed.
-// ============================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 3 — STATE TYPES & DEFAULTS
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Ky — fator de flexão (CEMA Tab 6.1) — interpolação por L (m)
-const KY_TABLE: [number, number][] = [
-  [30, 0.0407], [60, 0.0379], [90, 0.0355], [120, 0.0334],
-  [150, 0.0316], [180, 0.0301], [210, 0.0287], [240, 0.0274],
-  [270, 0.0263], [300, 0.0252], [360, 0.0233], [420, 0.0218],
-  [480, 0.0204], [540, 0.0193], [600, 0.0183], [750, 0.0163],
-  [900, 0.0149], [1200, 0.0128], [1500, 0.0115], [1800, 0.0106],
-];
-function interpKy(L: number): number {
-  if (L <= KY_TABLE[0][0]) return KY_TABLE[0][1];
-  if (L >= KY_TABLE[KY_TABLE.length - 1][0]) return KY_TABLE[KY_TABLE.length - 1][1];
-  for (let i = 0; i < KY_TABLE.length - 1; i++) {
-    const [x1, y1] = KY_TABLE[i];
-    const [x2, y2] = KY_TABLE[i + 1];
-    if (L >= x1 && L <= x2) return y1 + (y2 - y1) * (L - x1) / (x2 - x1);
+interface State {
+  // Project
+  projectName: string; conveyorTag: string;
+  // Duty
+  capacityTph: number; beltSpeed: number; materialEntrySpeed: number;
+  centerLengthM: number; liftM: number;
+  // Belt & load
+  beltWidthMm: number; bulkDensity: number; troughAngleDeg: number;
+  surchargeAngleDeg: number; centerRollFraction: number; edgeFreeboardPct: number;
+  useEstimatedBeltWeight: boolean; steelCord: boolean; beltWeightKgPm: number;
+  idlerSpacingM: number; sagPercent: number;
+  // CEMA factors
+  idlerFamily: string; twoRollVReturn: boolean;
+  overrideKx: boolean; manualKx: number;
+  ky: number; kt: number; cwPreset: string; cw: number;
+  // Pulleys & accessories
+  tightPulleys: number; slackPulleys: number; otherPulleys: number;
+  plainBearings: boolean; overrideTp: boolean; manualTpLbf: number;
+  cleanerBlades: number; fullPlows: number; partialPlows: number;
+  skirtLengthM: number; skirtDepthMm: number; csFactor: number;
+  rubberEdging: boolean; otherAccessoryKN: number;
+  // Plugged chute
+  pluggedChuteMode: string; pluggedApplyInFlow: boolean;
+  pluggedWidthMm: number; pluggedHeightMm: number; pluggedLengthM: number;
+  pluggedWallFriction: number; pluggedShearStressKPa: number;
+  pluggedStartupFactor: number; manualPluggedFlowKN: number;
+  // Drive
+  driveEfficiencyPct: number; serviceFactor: number;
+  // Profile & vertical curves
+  beltModulusKNpm: number; beltRatedTensionKNpm: number;
+  minBuckleTensionKNpm: number; autoCurveShare: number;
+  profileNodesJson: string; profileMarkersJson: string;
+  // UI
+  theme: 'light' | 'dark';
+}
+
+const DEFAULT_NODES_JSON = '[{"id":"N0","station":0,"elev":0,"curveLengthM":0},{"id":"N1","station":88,"elev":7,"curveLengthM":38},{"id":"N2","station":160,"elev":14,"curveLengthM":32},{"id":"N3","station":220,"elev":18,"curveLengthM":0}]';
+const DEFAULT_MARKERS_JSON = '[{"id":"M1","label":"Tail pulley","type":"tail","station":0},{"id":"M2","label":"Feed point","type":"feed","station":28},{"id":"M3","label":"Take-up","type":"takeup","station":48},{"id":"M4","label":"Return pulley","type":"return","station":200},{"id":"M5","label":"Drive","type":"drive","station":220}]';
+
+const DEFAULTS: State = {
+  projectName: 'Sample Project', conveyorTag: 'CV-101',
+  capacityTph: 1200, beltSpeed: 3.5, materialEntrySpeed: 0.4,
+  centerLengthM: 220, liftM: 18,
+  beltWidthMm: 1200, bulkDensity: 1.85, troughAngleDeg: 35,
+  surchargeAngleDeg: 20, centerRollFraction: 0.33, edgeFreeboardPct: 10,
+  useEstimatedBeltWeight: false, steelCord: false, beltWeightKgPm: 28,
+  idlerSpacingM: 1.2, sagPercent: 2,
+  idlerFamily: 'D5_5in', twoRollVReturn: false,
+  overrideKx: false, manualKx: 0.45, ky: 0.019, kt: 1.0,
+  cwPreset: 'lagged220', cw: 0.35,
+  tightPulleys: 1, slackPulleys: 2, otherPulleys: 1, plainBearings: false,
+  overrideTp: false, manualTpLbf: 0,
+  cleanerBlades: 2, fullPlows: 0, partialPlows: 0,
+  skirtLengthM: 8, skirtDepthMm: 60, csFactor: 0.1086,
+  rubberEdging: true, otherAccessoryKN: 0,
+  pluggedChuteMode: 'off', pluggedApplyInFlow: false,
+  pluggedWidthMm: 1200, pluggedHeightMm: 350, pluggedLengthM: 1.8,
+  pluggedWallFriction: 0.45, pluggedShearStressKPa: 12,
+  pluggedStartupFactor: 1.6, manualPluggedFlowKN: 0,
+  driveEfficiencyPct: 95, serviceFactor: 1.15,
+  beltModulusKNpm: 12000, beltRatedTensionKNpm: 800,
+  minBuckleTensionKNpm: 5, autoCurveShare: 0.35,
+  profileNodesJson: DEFAULT_NODES_JSON, profileMarkersJson: DEFAULT_MARKERS_JSON,
+  theme: 'light',
+};
+
+const SAMPLE: State = {
+  ...DEFAULTS,
+  projectName: 'Iron Ore Transfer', conveyorTag: 'CV-4201',
+  capacityTph: 1800, beltSpeed: 4.2, materialEntrySpeed: 0.9,
+  centerLengthM: 365, liftM: 24,
+  beltWidthMm: 1400, bulkDensity: 2.2,
+  useEstimatedBeltWeight: true, steelCord: true, beltWeightKgPm: 0,
+  idlerSpacingM: 1.35, idlerFamily: 'D6_6in',
+  cwPreset: 'lagged180gravity', cw: 0.5,
+  tightPulleys: 1, slackPulleys: 3, otherPulleys: 1,
+  cleanerBlades: 2, skirtLengthM: 10, skirtDepthMm: 80,
+  csFactor: 0.276, rubberEdging: true,
+  driveEfficiencyPct: 94.5, ky: 0.0175,
+};
+
+const STORAGE_KEY = 'cema7ConveyorPowerWorksheetStateV1';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 4 — CALCULATION ENGINE (CEMA 7 Historical Method)
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ProfileNode { id: string; station: number; elev: number; curveLengthM: number; }
+interface ProfileMarker { id: string; label: string; type: string; station: number; }
+interface BeltSectionGeom {
+  widthM: number; troughRad: number; edgeDistanceM: number;
+  usableHalfWidth: number; centerHalf: number; sideRun: number;
+  edgeY: number; beltY: (x: number) => number;
+}
+interface FillModel {
+  geom: BeltSectionGeom; cemaAvailableAreaM2: number; maxAreaM2: number;
+  occupiedAreaM2: number; apexHeightM: number; loadedHalfWidthM: number;
+  fillToAvailableRatio: number; fillToMaxRatio: number;
+  edgeDistanceM: number; totalEdgeClearanceM: number;
+  surchargeAngleUsedDeg: number; availableAreaFactor: number; maxAreaFactor: number;
+}
+interface VerticalCurve {
+  id: string; type: string; station: number; elev: number;
+  startStation: number; endStation: number; deltaDeg: number;
+  actualR: number; requiredR: number; marginPct: number;
+  curveLengthM: number; status: string;
+  localTensionKN: number;
+  checks: Record<string, number>;
+}
+interface ProfileResult {
+  nodes: ProfileNode[]; markers: ProfileMarker[];
+  totalLen: number; drivePos: number;
+  curves: VerticalCurve[];
+}
+interface CompRow { label: string; lbf: number; kw: number; basis: string }
+interface TensionComponent {
+  key: string; label: string; lbf: number; kw: number; basis: string;
+}
+interface CalcResult extends State {
+  widthIn: number; vFpm: number; v0Fpm: number; qShortTph: number;
+  lengthFt: number; liftFt: number; slopePct: number; spacingFt: number;
+  estimate: { lbft: number; kgpm: number; standardWidthIn: number; densityBand: string };
+  beltWeightLbft: number; beltWeightKgPm: number;
+  wmLbft: number; wmKgPm: number;
+  aiAdjusted: number; kxAuto: number; kxUsed: number;
+  txLbf: number; tycLbf: number; tyrLbf: number; tybLbf: number;
+  tymLbf: number; tmLbf: number; tbLbf: number;
+  tpCountLbf: number; tpLbf: number;
+  tamLbf: number; tbcLbf: number; tplLbf: number; tsbLbf: number;
+  otherAccessoryLbf: number; tacLbf: number;
+  pluggedFlowKN: number; pluggedStartupKN: number; pluggedStartupExtraKN: number;
+  pluggedFlowLbf: number; pluggedStartupLbf: number; pluggedStartupExtraLbf: number;
+  pluggedMethodBasis: string;
+  teBaseLbf: number; teLbf: number; startupTeLbf: number;
+  beltHp: number; beltKw: number; startupBeltHp: number; startupBeltKw: number;
+  motorKw: number; motorHp: number; startupMotorKw: number; startupMotorHp: number;
+  t0Lbf: number; t2SlipLbf: number; t2SagLbf: number;
+  t2Lbf: number; t1Lbf: number; counterweightLbf: number;
+  dutyMode: string; governingSource: string;
+  requiredAreaM2: number; fillModel: FillModel;
+  occupiedAreaM2: number; cemaAvailableAreaM2: number; maxAreaM2: number;
+  edgeDistanceM: number; totalEdgeClearanceM: number;
+  fillAreaPct: number; fillToMaxPct: number;
+  components: TensionComponent[];
+  profile: ProfileResult;
+}
+
+// ── Interpolation helpers ─────────────────────────────────────────────────────
+
+function interpSeries(series: Record<number, number>, widthIn: number): number {
+  const keys = Object.keys(series).map(Number).sort((a, b) => a - b);
+  if (widthIn <= keys[0]) return series[keys[0]];
+  if (widthIn >= keys[keys.length - 1]) {
+    const k0 = keys[keys.length - 2], k1 = keys[keys.length - 1];
+    return series[k1] + ((widthIn - k1) / (k1 - k0)) * (series[k1] - series[k0]);
   }
-  return 0.025;
-}
-
-// Capacidade volumétrica por largura (m³/h por m/s) — CEMA Tab 4.3 (3 roletes 35° surcharge 20°)
-const CEMA_CAP_VOL: Record<number, number> = {
-  18: 62, 24: 115, 30: 186, 36: 272, 42: 374, 48: 492,
-  54: 627, 60: 778, 72: 1128, 84: 1548, 96: 2034,
-};
-
-// Larguras padrão CEMA
-export const BW_OPTIONS = [18, 24, 30, 36, 42, 48, 54, 60, 72, 84, 96];
-
-// Classe de roletes CEMA
-const IDLER_CLASS: Record<string, { l: string; A1: number; A2: number; max_load_lb: number }> = {
-  B: { l: "CEMA B (light)", A1: 1.5, A2: 0.0150, max_load_lb: 410 },
-  C: { l: "CEMA C (medium)", A1: 1.8, A2: 0.0180, max_load_lb: 900 },
-  D: { l: "CEMA D (heavy)", A1: 2.4, A2: 0.0220, max_load_lb: 1500 },
-  E: { l: "CEMA E (very heavy)", A1: 3.0, A2: 0.0260, max_load_lb: 2400 },
-  F: { l: "CEMA F (heaviest)", A1: 3.6, A2: 0.0300, max_load_lb: 3600 },
-};
-
-// Capacidade dinâmica dos rolamentos por classe CEMA (N) — CEMA Table 11.1
-const IDLER_BEARING_C: Record<string, number> = {
-  B: 3_800, C: 6_700, D: 9_600, E: 14_200, F: 20_000,
-};
-
-// Diâmetro padrão do rolo por largura e classe (mm) — CEMA Table 6.9
-const IDLER_ROLL_D: Record<string, number> = {
-  B: 89, C: 102, D: 127, E: 152, F: 178,
-};
-
-// Catálogo de correias — (rating em kN/m = N/mm, resistência nominal por largura unitária)
-const BELT_CATALOG: { type: string; rating: number; cover: string; max_vel: number; st: boolean }[] = [
-  { type: "EP 200", rating: 200, cover: "3+1.5", max_vel: 3.5, st: false },
-  { type: "EP 250", rating: 250, cover: "4+2", max_vel: 4.0, st: false },
-  { type: "EP 315", rating: 315, cover: "5+2", max_vel: 4.5, st: false },
-  { type: "EP 400", rating: 400, cover: "6+2", max_vel: 5.0, st: false },
-  { type: "EP 500", rating: 500, cover: "6+3", max_vel: 5.5, st: false },
-  { type: "EP 630", rating: 630, cover: "8+3", max_vel: 6.0, st: false },
-  { type: "EP 800", rating: 800, cover: "10+4", max_vel: 6.5, st: false },
-  { type: "EP 1000", rating: 1000, cover: "12+4", max_vel: 7.0, st: false },
-  { type: "ST 500", rating: 500, cover: "6+3", max_vel: 5.5, st: true },
-  { type: "ST 800", rating: 800, cover: "8+4", max_vel: 6.5, st: true },
-  { type: "ST 1000", rating: 1000, cover: "10+5", max_vel: 7.5, st: true },
-  { type: "ST 1250", rating: 1250, cover: "12+6", max_vel: 8.5, st: true },
-  { type: "ST 1600", rating: 1600, cover: "14+7", max_vel: 9.5, st: true },
-  { type: "ST 2000", rating: 2000, cover: "16+8", max_vel: 10.5, st: true },
-  { type: "ST 2500", rating: 2500, cover: "18+9", max_vel: 11.5, st: true },
-];
-
-// Material database — densidade, surcharge, repose, ângulo máximo
-export const MATERIAL_DB: Record<string, { name: string; rho: number; phi_s: number; phi_r: number; phi_max: number }> = {
-  iron_ore_pellets: { name: "Pelotas de minério de ferro", rho: 2100, phi_s: 15, phi_r: 30, phi_max: 13 },
-  iron_ore_fines: { name: "Minério de ferro (fino)", rho: 2500, phi_s: 20, phi_r: 35, phi_max: 18 },
-  iron_ore_lump: { name: "Minério de ferro (granulado)", rho: 2400, phi_s: 25, phi_r: 35, phi_max: 18 },
-  coal_run: { name: "Carvão (run-of-mine)", rho: 800, phi_s: 25, phi_r: 38, phi_max: 18 },
-  coal_fine: { name: "Carvão fino", rho: 900, phi_s: 25, phi_r: 35, phi_max: 22 },
-  limestone_crushed: { name: "Calcário britado", rho: 1500, phi_s: 22, phi_r: 38, phi_max: 18 },
-  gravel_dry: { name: "Cascalho seco", rho: 1700, phi_s: 20, phi_r: 35, phi_max: 18 },
-  sand_dry: { name: "Areia seca", rho: 1600, phi_s: 15, phi_r: 30, phi_max: 16 },
-  bauxite: { name: "Bauxita", rho: 1280, phi_s: 25, phi_r: 35, phi_max: 18 },
-  cement_clinker: { name: "Clínquer de cimento", rho: 1400, phi_s: 22, phi_r: 38, phi_max: 18 },
-  copper_ore: { name: "Minério de cobre", rho: 1900, phi_s: 20, phi_r: 35, phi_max: 18 },
-  nickel_ore: { name: "Minério de níquel", rho: 1700, phi_s: 22, phi_r: 35, phi_max: 18 },
-  manganese_ore: { name: "Minério de manganês", rho: 2000, phi_s: 20, phi_r: 35, phi_max: 18 },
-  phosphate_rock: { name: "Rocha fosfática", rho: 1400, phi_s: 25, phi_r: 38, phi_max: 18 },
-  coke_petroleum: { name: "Coque de petróleo", rho: 800, phi_s: 20, phi_r: 32, phi_max: 16 },
-  wood_chips: { name: "Cavacos de madeira", rho: 350, phi_s: 30, phi_r: 45, phi_max: 22 },
-  sugar_cane_bagasse: { name: "Bagaço de cana", rho: 200, phi_s: 35, phi_r: 50, phi_max: 25 },
-  potash: { name: "Potassa", rho: 1200, phi_s: 18, phi_r: 30, phi_max: 16 },
-  salt_bulk: { name: "Sal a granel", rho: 1200, phi_s: 20, phi_r: 32, phi_max: 18 },
-  grain_wheat: { name: "Grãos de trigo", rho: 780, phi_s: 17, phi_r: 28, phi_max: 15 },
-  soybean: { name: "Soja", rho: 720, phi_s: 16, phi_r: 28, phi_max: 14 },
-  corn_maize: { name: "Milho", rho: 740, phi_s: 16, phi_r: 28, phi_max: 14 },
-  sand_wet: { name: "Areia úmida", rho: 1900, phi_s: 22, phi_r: 38, phi_max: 18 },
-  clay_dry: { name: "Argila seca", rho: 1100, phi_s: 30, phi_r: 45, phi_max: 20 },
-  talc: { name: "Talco", rho: 900, phi_s: 25, phi_r: 40, phi_max: 18 },
-  gypsum: { name: "Gesso", rho: 1300, phi_s: 22, phi_r: 35, phi_max: 18 },
-  glass_cullet: { name: "Caco de vidro", rho: 1600, phi_s: 18, phi_r: 30, phi_max: 14 },
-  fly_ash: { name: "Cinza volante", rho: 700, phi_s: 20, phi_r: 35, phi_max: 16 },
-  custom: { name: "Customizado", rho: 900, phi_s: 20, phi_r: 35, phi_max: 18 },
-};
-
-// ============================================================
-// ÁREA DE ENCHIMENTO — CEMA 7th Ed. (3 roletes iguais)
-// Au = Ab + As, onde:
-//   Ab = área da seção em "U" = f(B, λ, b)
-//   As = área da coroa (surcharge cap)
-// b = largura útil da correia (CEMA: b = 0.9·B – 0.05 para B em metros)
-// ============================================================
-function fillingArea(B_mm: number, lambda_deg: number, phi_s_deg: number) {
-  const B = B_mm / 1000; // m
-  const b = 0.9 * B - 0.05; // largura útil (m)
-  const ll = b / 3; // comprimento de cada rolete (3 iguais)
-  const lambda = lambda_deg * Math.PI / 180;
-  const phi_s = phi_s_deg * Math.PI / 180;
-
-  // Largura no topo da seção em U
-  const bs = ll + 2 * (b - ll) / 2 * Math.cos(lambda);
-  // Altura do trapézio
-  const h = ((b - ll) / 2) * Math.sin(lambda);
-  // Área do trapézio (base lateral inferior + retângulo central)
-  // Decomposição: retângulo (ll × h) + 2 triângulos
-  const A_trap = ll * h + 2 * (0.5 * ((b - ll) / 2) * Math.cos(lambda) * h);
-
-  // Área do "cap" superior (segmento circular surcharge)
-  // Aproximação CEMA: triângulo isósceles com base bs e altura h_s
-  const h_s = (bs / 2) * Math.tan(phi_s);
-  const A_cap = 0.5 * bs * h_s;
-
-  const Au = A_trap + A_cap;
-  // Au máxima teórica (correia plana = 0, λ=0): apenas o cap → muito pequena
-  // Au máxima de referência: λ=45°, phi_s=phi_r → usamos a área para esses valores
-  return { Au, A_trap, A_cap, b_util: b, h_trough: h, h_cap: h_s };
-}
-
-// ============================================================
-// ÂNGULO MÁXIMO DE TRANSPORTE
-// Verifica se algum trecho excede o ângulo máximo do material
-// ============================================================
-function checkMaxAngle(segments: any[], phi_max: number) {
-  const violations: { idx: number; ang: number; max: number }[] = [];
-  segments.forEach((seg, i) => {
-    if (Math.abs(seg.ang) > phi_max) {
-      violations.push({ idx: i, ang: seg.ang, max: phi_max });
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (widthIn >= keys[i] && widthIn <= keys[i + 1]) {
+      const k0 = keys[i], k1 = keys[i + 1];
+      return series[k0] + ((widthIn - k0) / (k1 - k0)) * (series[k1] - series[k0]);
     }
+  }
+  return series[keys[0]];
+}
+
+function interpolateAvailableAreaM2(widthM: number, troughAngleDeg: number, surchargeAngleDeg: number): number {
+  const widthIn = widthM / 0.0254;
+  const troughKeys = Object.keys(CEMA_AVAILABLE_AREA).map(Number).sort((a, b) => a - b);
+  const trough = clamp(troughAngleDeg, troughKeys[0], troughKeys[troughKeys.length - 1]);
+  let low = troughKeys[0], high = troughKeys[troughKeys.length - 1];
+  for (let i = 0; i < troughKeys.length - 1; i++) {
+    if (trough >= troughKeys[i] && trough <= troughKeys[i + 1]) { low = troughKeys[i]; high = troughKeys[i + 1]; break; }
+  }
+  const aLow = interpSeries(CEMA_AVAILABLE_AREA[low], widthIn);
+  const aHigh = interpSeries(CEMA_AVAILABLE_AREA[high], widthIn);
+  const troughArea = high === low ? aLow : aLow + ((trough - low) / (high - low)) * (aHigh - aLow);
+  const surchargeCorrection = clamp(1 + 0.004 * (surchargeAngleDeg - 20), 0.88, 1.16);
+  return troughArea * surchargeCorrection;
+}
+
+function edgeDistancePerSideM(widthM: number): number { return 0.05 * widthM + 0.025; }
+
+function interpolateGeometryPreset(troughAngleDeg: number): { centerFrac: number } {
+  const keys = Object.keys(BELT_SECTION_GEOMETRY).map(Number).sort((a, b) => a - b);
+  const trough = clamp(troughAngleDeg, keys[0], keys[keys.length - 1]);
+  let low = keys[0], high = keys[keys.length - 1];
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (trough >= keys[i] && trough <= keys[i + 1]) { low = keys[i]; high = keys[i + 1]; break; }
+  }
+  const a = BELT_SECTION_GEOMETRY[low], b = BELT_SECTION_GEOMETRY[high];
+  if (high === low) return a;
+  const t = (trough - low) / (high - low);
+  return { centerFrac: a.centerFrac + t * (b.centerFrac - a.centerFrac) };
+}
+
+function beltSectionGeometry(widthM: number, troughAngleDeg: number): BeltSectionGeom {
+  const B = Math.max(widthM, 0.05);
+  const lambda = clamp(troughAngleDeg, 0, 60) * Math.PI / 180;
+  const preset = interpolateGeometryPreset(troughAngleDeg);
+  const edgeDist = edgeDistancePerSideM(B);
+  const usableHalfWidth = Math.max(B / 2 - edgeDist, 0.001);
+  const centerFrac = clamp(preset.centerFrac, 0.2, 0.85);
+  const centerHalf = Math.min((B * centerFrac) / 2, usableHalfWidth * 0.95);
+  const sideRun = Math.max(usableHalfWidth - centerHalf, 0.0001);
+  const edgeY = sideRun * Math.tan(lambda);
+  const beltY = (x: number) => {
+    const ax = Math.abs(x);
+    if (ax <= centerHalf) return 0;
+    return (ax - centerHalf) * Math.tan(lambda);
+  };
+  return { widthM: B, troughRad: lambda, edgeDistanceM: edgeDist, usableHalfWidth, centerHalf, sideRun, edgeY, beltY };
+}
+
+function integrateArea(fn: (x: number) => number, xmin: number, xmax: number, steps = 600): number {
+  const dx = (xmax - xmin) / steps;
+  let area = 0;
+  for (let i = 0; i < steps; i++) {
+    const x1 = xmin + i * dx, x2 = x1 + dx;
+    area += 0.5 * (fn(x1) + fn(x2)) * dx;
+  }
+  return area;
+}
+
+function materialAreaForApexHeight(geom: BeltSectionGeom, phi: number, apexHeightM: number): number {
+  const tanPhi = Math.tan(phi);
+  const ySurf = (x: number) => apexHeightM - Math.abs(x) * tanPhi;
+  const fn = (x: number) => Math.max(0, ySurf(x) - geom.beltY(x));
+  return integrateArea(fn, -geom.usableHalfWidth, geom.usableHalfWidth);
+}
+
+function loadedHalfWidthForApex(geom: BeltSectionGeom, phi: number, apexHeightM: number): number {
+  const tanPhi = Math.tan(phi);
+  let lo = 0, hi = geom.usableHalfWidth;
+  const diff = (x: number) => apexHeightM - Math.abs(x) * tanPhi - geom.beltY(x);
+  if (diff(lo) <= 0) return 0;
+  if (diff(hi) > 0) return hi;
+  for (let i = 0; i < 52; i++) {
+    const mid = 0.5 * (lo + hi);
+    if (diff(mid) > 0) lo = mid; else hi = mid;
+  }
+  return 0.5 * (lo + hi);
+}
+
+function solveCrossSectionFill(widthM: number, troughAngleDeg: number, surchargeAngleDeg: number, requiredAreaM2: number): FillModel {
+  const geom = beltSectionGeometry(widthM, troughAngleDeg);
+  const phiDeg = clamp(surchargeAngleDeg, 0.1, 80);
+  const phi = phiDeg * Math.PI / 180;
+  const cemaAvailableAreaM2 = interpolateAvailableAreaM2(widthM, troughAngleDeg, phiDeg);
+  const maxAreaM2 = cemaAvailableAreaM2 / 0.70;
+  const maxApexHeight = geom.edgeY + geom.usableHalfWidth * Math.tan(phi);
+  const targetArea = Math.max(requiredAreaM2 || 0, 0);
+  let apexHeight = maxApexHeight;
+  if (targetArea > 0 && targetArea < maxAreaM2) {
+    let lo = 0, hi = maxApexHeight;
+    const areaAtMax = materialAreaForApexHeight(geom, phi, maxApexHeight);
+    for (let i = 0; i < 56; i++) {
+      const mid = 0.5 * (lo + hi);
+      const midArea = areaAtMax > 0 ? (materialAreaForApexHeight(geom, phi, mid) / areaAtMax) * maxAreaM2 : 0;
+      if (midArea < targetArea) lo = mid; else hi = mid;
+    }
+    apexHeight = 0.5 * (lo + hi);
+  } else if (targetArea >= maxAreaM2) { apexHeight = maxApexHeight; } else { apexHeight = 0; }
+  const occupiedAreaM2 = Math.min(targetArea, maxAreaM2);
+  const loadedHalfWidthM = loadedHalfWidthForApex(geom, phi, apexHeight);
+  const B2 = widthM * widthM;
+  return {
+    geom, cemaAvailableAreaM2, maxAreaM2, occupiedAreaM2, apexHeightM: apexHeight,
+    loadedHalfWidthM, edgeDistanceM: geom.edgeDistanceM, totalEdgeClearanceM: 2 * geom.edgeDistanceM,
+    fillToAvailableRatio: cemaAvailableAreaM2 > 0 ? occupiedAreaM2 / cemaAvailableAreaM2 : NaN,
+    fillToMaxRatio: maxAreaM2 > 0 ? occupiedAreaM2 / maxAreaM2 : NaN,
+    surchargeAngleUsedDeg: phiDeg,
+    availableAreaFactor: B2 > 0 ? cemaAvailableAreaM2 / B2 : NaN,
+    maxAreaFactor: B2 > 0 ? maxAreaM2 / B2 : NaN,
+  };
+}
+
+function estimateBeltWeight(widthMm: number, densityTm3: number, steelCord: boolean): { lbft: number; kgpm: number; standardWidthIn: number; densityBand: string } {
+  const widthIn = widthMm * IN_PER_MM;
+  const widths = BELT_WEIGHT_TABLE.widthsIn;
+  let idx = 0; let bestD = Infinity;
+  for (let i = 0; i < widths.length; i++) { const d = Math.abs(widths[i] - widthIn); if (d < bestD) { bestD = d; idx = i; } }
+  let series: number[] = BELT_WEIGHT_TABLE.low, densityBand = 'light';
+  if (densityTm3 >= 2.0) { series = BELT_WEIGHT_TABLE.high; densityBand = 'heavy'; }
+  else if (densityTm3 >= 1.2) { series = BELT_WEIGHT_TABLE.medium; densityBand = 'medium'; }
+  let lbft = series[idx];
+  if (steelCord) lbft *= 1.5;
+  const kgpm = lbft * KGPM_PER_LBFT;
+  return { lbft, kgpm, standardWidthIn: widths[idx], densityBand };
+}
+
+function ktFromTempC(tempC: number): number {
+  const tF = tempC * 9 / 5 + 32;
+  if (tF <= KT_CURVE[0].tF) return KT_CURVE[0].kt;
+  if (tF >= KT_CURVE[KT_CURVE.length - 1].tF) return KT_CURVE[KT_CURVE.length - 1].kt;
+  for (let i = 0; i < KT_CURVE.length - 1; i++) {
+    const a = KT_CURVE[i], b = KT_CURVE[i + 1];
+    if (tF >= a.tF && tF <= b.tF) return a.kt + ((tF - a.tF) / (b.tF - a.tF)) * (b.kt - a.kt);
+  }
+  return 1.0;
+}
+
+function interpolateProfileElevation(nodes: ProfileNode[], station: number): number {
+  if (!nodes.length) return 0;
+  const s = clamp(station, nodes[0].station, nodes[nodes.length - 1].station);
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const a = nodes[i], b = nodes[i + 1];
+    if (s >= a.station && s <= b.station) {
+      const span = Math.max(b.station - a.station, 1e-6);
+      return a.elev + ((s - a.station) / span) * (b.elev - a.elev);
+    }
+  }
+  return nodes[nodes.length - 1].elev;
+}
+
+function parseJsonList<T>(raw: string, fallback: T[]): T[] {
+  try { const p = JSON.parse(raw); return Array.isArray(p) ? p : fallback; } catch { return fallback; }
+}
+
+function sanitizeProfile(nodesRaw: string, markersRaw: string, totalLengthM: number, totalLiftM: number) {
+  const L = Math.max(totalLengthM || 1, 1);
+  const defaultNodes: ProfileNode[] = [
+    { id: 'N0', station: 0, elev: 0, curveLengthM: 0 },
+    { id: 'N1', station: L, elev: totalLiftM || 0, curveLengthM: 0 },
+  ];
+  const defaultMarkers: ProfileMarker[] = [
+    { id: 'M1', label: 'Tail', type: 'tail', station: 0 },
+    { id: 'M2', label: 'Drive', type: 'drive', station: L },
+  ];
+  const nodes: ProfileNode[] = parseJsonList<ProfileNode>(nodesRaw, defaultNodes).map((n, i) => ({
+    id: String(n.id ?? `N${i}`), station: Number(n.station) || 0,
+    elev: Number(n.elev) || 0, curveLengthM: Number(n.curveLengthM) || 0,
+  }));
+  const markers: ProfileMarker[] = parseJsonList<ProfileMarker>(markersRaw, defaultMarkers).map((m, i) => ({
+    id: String(m.id ?? `M${i}`), label: String(m.label ?? `Marker ${i}`),
+    type: String(m.type ?? 'custom'), station: Number(m.station) || 0,
+  }));
+  return { nodes, markers };
+}
+
+function computeProfileAndCurves(s: State, baseResults: { teLbf: number; t2Lbf: number; t1Lbf: number; wmKgPm: number; beltWeightKgPm: number }): ProfileResult {
+  const { nodes, markers } = sanitizeProfile(s.profileNodesJson, s.profileMarkersJson, s.centerLengthM, s.liftM);
+  const totalLen = nodes[nodes.length - 1]?.station || 1;
+  const driveMarker = markers.find(m => m.type === 'drive') || { station: totalLen };
+  const drivePos = clamp(driveMarker.station, 1e-6, totalLen);
+  const absTe = Math.abs(baseResults.teLbf);
+  const tensionAtStationLbf = (station: number) => {
+    const x = clamp(station, 0, totalLen);
+    if (x <= drivePos) return baseResults.t2Lbf + ((drivePos - x) / Math.max(drivePos, 1e-6)) * absTe;
+    return baseResults.t2Lbf;
+  };
+  const wmTotal = baseResults.wmKgPm + baseResults.beltWeightKgPm;
+  const alpha = (s.troughAngleDeg || 0) * Math.PI / 180;
+  const widthM = Math.max(s.beltWidthMm / 1000, 0.1);
+  const E = Math.max(s.beltModulusKNpm, 0);
+  const tr = Math.max(s.beltRatedTensionKNpm, 0.0001);
+  const tmin = Math.max(s.minBuckleTensionKNpm, 0);
+  const autoShare = clamp(s.autoCurveShare, 0.05, 0.8);
+
+  const segments = nodes.slice(0, -1).map((a, i) => {
+    const b = nodes[i + 1];
+    const ds = b.station - a.station, de = b.elev - a.elev;
+    return { start: a, end: b, lengthM: Math.hypot(ds, de), riseM: de, angleRad: Math.atan2(de, Math.max(ds, 1e-6)) };
   });
-  return violations;
-}
 
-// ============================================================
-// RAIOS MÍNIMOS DE CURVAS (CEMA 7th Ed. cap. 9)
-// Convexa: T1 não pode descolar → Rmin = T1 / (Wb · cos(β))
-// Côncava: levantamento da correia → Rmin = T1 / (Wb·g·cos(β))
-// ============================================================
-function minRadius(T1_kgf: number, Wb: number, beta_deg: number) {
-  const beta = beta_deg * Math.PI / 180;
-  const cos_b = Math.max(Math.cos(beta), 0.01);
-  // Convexa: empírico CEMA → Rmin ≈ T1 / (Wb · cos(β)) para correias txteis
-  const R_convex = T1_kgf / (Wb * cos_b);
-  // Côncava: levantamento → mais crítico, fator 1.5
-  const R_concave = 1.5 * T1_kgf / (Wb * cos_b);
-  return { R_convex, R_concave };
-}
-
-// ============================================================
-// CÁLCULO PRINCIPAL — CEMA 7th Ed. com decomposição completa
-// ============================================================
-function calc(inp: any, pulleys: any[] = []) {
-  const g = 9.81;
-  const {
-    mat_d, cap_th, phi_s,
-    segments,
-    larg_pol, ang_rol, vel_ms, Wb, n_lonas, cap_tens,
-    esp_rol, esp_rol_ret, idler_cl, p_rol_carga, p_rol_ret,
-    d_tamb_mm, ang_abr, mu_lag,
-    n_limp, comp_guias, Cs, n_plows, F_plow,
-    freq_hz, n_polos, n_ac, ef_c, ef_r, ef_a,
-    tens_type,
-    // Dinâmico (novos)
-    Kst = 1.5, t_start = 8, t_brake = 10, a_brake = 0.3,
-    // Chute entupido (novos)
-    chute_plug = false, chute_area_m2 = 1.2, mat_shear_kpa = 35,
-  } = inp;
-
-  // ----- Geometria -----
-  const L_h = segments.reduce((a: number, s: any) => a + s.comp * Math.cos(s.ang * Math.PI / 180), 0);
-  const L_total = segments.reduce((a: number, s: any) => a + s.comp, 0);
-  const H_total = segments.reduce((a: number, s: any) => a + s.comp * Math.sin(s.ang * Math.PI / 180), 0);
-  const beta_eq = Math.atan2(H_total, L_h) * 180 / Math.PI;
-
-  // ----- Material e capacidade -----
-  const cap_vol_ref = CEMA_CAP_VOL[larg_pol] || 500; // m³/h por m/s, ref CEMA 35°/20°
-  const fa = fillingArea(larg_pol * 25.4, ang_rol, phi_s);
-  // Au de referência CEMA (35°/20°)
-  const fa_ref = fillingArea(larg_pol * 25.4, 35, 20);
-  const cap_vol_real = cap_vol_ref * (fa.Au / fa_ref.Au); // ajusta pela Au real
-  const V_min = cap_th / (mat_d / 1000 * cap_vol_real);
-  const V = Math.max(vel_ms, V_min);
-  const cap_real = cap_vol_real * V * mat_d / 1000;
-  const Ku = fa.Au / fa_ref.Au; // fator de utilização
-  const Wm = cap_th * 1000 / (3600 * V); // kgf/m
-
-  // ----- Coeficientes -----
-  const Ky = interpKy(L_total);
-  const idx = IDLER_CLASS[idler_cl] || IDLER_CLASS.D;
-  const Kx = 0.00068 * (Wb + Wm) + idx.A1 / esp_rol; // CEMA: A1 lb por idler / espaçamento
-
-  // ----- Resistências CEMA decompostas (kgf) -----
-  // Tx — flexão dos roletes
-  const Tx = Kx * L_total;
-  // Ty — flexão da correia (carga)
-  const Ty = Ky * L_total * (Wb + Wm);
-  // Tyr — flexão da correia (retorno)
-  const Kyr = Ky * 0.6;
-  const Tyr = Kyr * L_total * Wb;
-  // Tyc — não usado separado no CEMA básico (já em Ty), mantido = 0
-  const Tyc = 0;
-  // Tm — elevação do material
-  const Tm = H_total * Wm;
-  // Tb — elevação da correia (zera no fim do ciclo, mas relevante por trecho)
-  const Tb = 0;
-  // Tac — guias laterais (skirts)
-  const Tsb = Cs * (comp_guias || 0) * V * V * mat_d / 1000;
-  // Tbc — limpadores
-  const Tbc = n_limp * 100.8;
-  // Tpl — plows
-  const Tpl = (n_plows || 0) * (F_plow || 0);
-  // Aceleração do material (start to belt speed)
-  const Tam = cap_th * 1000 * V / (3600 * g);
-
-  const Te = Tx + Ty + Tyr + Tm + Tb + Tsb + Tbc + Tpl + Tam;
-
-  // ----- Potência -----
-  const Ne_kw = Te * g * V / 1000; // kW efetivo
-  const ef_t = ef_c * ef_r * ef_a;
-  const N_kw = Ne_kw / ef_t;
-  const N_hp = N_kw / 0.7355;
-  const N_cv = N_kw / 0.7355 * 1.01387;
-  const N_per_kw = N_kw / n_ac;
-  const N_per_hp = N_hp / n_ac;
-
-  // ----- Rotações e redução -----
-  const n_sinc = (120 * freq_hz) / n_polos;
-  const n_mot = n_sinc * 0.97;
-  const n_tamb = (V * 60) / (Math.PI * (d_tamb_mm / 1000));
-  const i_red = n_mot / n_tamb;
-
-  // ----- Tensões T1, T2 -----
-  // Ângulo de abraçamento real calculado geometricamente:
-  // θ = ang_abr (base, para conveyor horizontal) + inclinação do trecho no tambor + bônus do snub
-  const drivePulley = pulleys.find((p: any) => p.type === "drive");
-  const snubPulley  = pulleys.find((p: any) => p.type === "snub");
-
-  // 1) Inclinação local no tambor motor — percorre os trechos para achar o ângulo do segmento
-  let beta_drive = 0;
-  if (drivePulley) {
-    let xAcc = 0;
-    for (const seg of segments) {
-      xAcc += seg.comp;
-      if (xAcc >= drivePulley.x) { beta_drive = seg.ang; break; }
+  const curves: VerticalCurve[] = [];
+  for (let i = 1; i < nodes.length - 1; i++) {
+    const prev = segments[i - 1], next = segments[i];
+    const delta = next.angleRad - prev.angleRad;
+    if (Math.abs(delta) < 1e-6) continue;
+    const kind = delta > 0 ? 'concave' : 'convex';
+    const deltaAbs = Math.abs(delta);
+    const node = nodes[i];
+    const suggestedLc = autoShare * Math.min(prev.lengthM, next.lengthM);
+    const curveLengthM = Math.max(node.curveLengthM || suggestedLc, 0.5);
+    const actualR = curveLengthM / Math.max(deltaAbs, 1e-6);
+    const setback = actualR * Math.tan(deltaAbs / 2);
+    const startStation = node.station - setback;
+    const endStation = node.station + setback;
+    const fits = startStation >= prev.start.station && endStation <= next.end.station;
+    const localTensionLbf = tensionAtStationLbf(node.station);
+    const localTensionKN = lbfToKn(localTensionLbf);
+    const localWidthTension = localTensionKN / widthM;
+    const req: Record<string, number> = {};
+    const gravityKnPm = (wmTotal * G_MPS2) / 1000;
+    if (kind === 'concave') {
+      req['R11_liftoff'] = localWidthTension > 0 ? (gravityKnPm * curveLengthM) / localWidthTension : Infinity;
+      req['R12_edgeBending'] = E > 0 ? (0.5 * E * widthM) / tr : 0;
+      req['R13_accel'] = wmTotal > 0 ? (wmTotal * G_MPS2 * widthM) / (localWidthTension * 1000 + 1e-9) : 0;
+    } else {
+      req['R21_edgeStress'] = tr > 0 ? (E * widthM * Math.sin(alpha)) / Math.max(tr - localWidthTension, 1e-6) : 0;
+      req['R22_buckle'] = tmin > 0 ? (E * widthM) / Math.max(tmin, 1e-6) * 0.01 : 0;
+      req['R23_idlerAngle'] = 114 * 0.3048 * 1.0;
     }
-    // Se o tambor está além do comprimento total, usa o ângulo do último trecho
-    if (drivePulley.x >= L_total) beta_drive = segments[segments.length - 1]?.ang || 0;
-  }
-
-  // 2) Bônus do snub: quanto mais próximo o snub do motor, maior o abraçamento adicional
-  let snub_bonus = 0;
-  if (drivePulley && snubPulley) {
-    const dist = Math.abs(snubPulley.x - drivePulley.x);
-    snub_bonus = dist < 5 ? 40 * (1 - dist / 5) : 0;
-  }
-
-  // 3) Ângulo real = base + contribuição da inclinação do trecho + snub
-  //    Em conveyors ascendentes (beta > 0) a correia abraça mais o tambor de cabeça.
-  //    Em conveyors descendentes (beta < 0) a correia abraça menos.
-  const ang_abr_real = Math.min(270, Math.max(120, ang_abr + beta_drive + snub_bonus));
-  const wrap_r = ang_abr_real * Math.PI / 180;
-  const Cw = Math.exp(mu_lag * wrap_r);
-  const T1 = Te * Cw / (Cw - 1);
-  const T2_min = T1 - Te;
-
-  // Posição do tensionamento afeta T2 efetivo
-  // Take-up próximo à cauda: T2 = T2_min (ideal)
-  // Take-up longe da cauda: T2 cresce ~5% por cada 10m de distância
-  const takeupPulley = pulleys.find(p => p.type === "takeup");
-  const tailPulley = pulleys.find(p => p.type === "tail");
-  let T2_factor = 1.0;
-  if (takeupPulley && tailPulley) {
-    const dist_tu = Math.abs(takeupPulley.x - tailPulley.x);
-    T2_factor = 1 + Math.min(dist_tu / 200, 0.15); // até +15%
-  }
-  const T2 = T2_min * T2_factor;
-  const T1_eff = T2 + Te;
-  const Tad = (cap_tens * (larg_pol * 25.4) / 1000) / g;
-
-  // ----- Sag (catenária mínima 2%) -----
-  const T_sag_carga = (esp_rol * (Wb + Wm)) / (8 * 0.02);
-  const T_sag_ret = (esp_rol_ret * Wb) / (8 * 0.02);
-  const T_sag = Math.max(T_sag_carga, T_sag_ret);
-
-  // ----- Tensionamento -----
-  let Wcp = 0, screw_travel = 0, auto_force = 0;
-  if (tens_type === "gravity") {
-    Wcp = 2 * T2; // contrapeso = 2·T2 (dois ramais)
-  } else if (tens_type === "screw") {
-    // Curso = elongation total da correia (~1.5%)
-    screw_travel = L_total * 0.015 * 1000; // mm
-  } else if (tens_type === "automatic") {
-    auto_force = 2 * T2;
-  }
-
-  // ----- Raios mínimos de curvas -----
-  const radii = minRadius(T1, Wb, Math.abs(beta_eq));
-
-  // ----- Ângulo máx vs material -----
-  const phi_max_mat = inp.phi_max_mat || 18;
-  const angle_violations = checkMaxAngle(segments, phi_max_mat);
-
-  // ----- Perfil de tensão por trecho -----
-  // Constrói curva integrando resistências distribuídas
-  const curve: any[] = [];
-  const npts = 30;
-  let cum_L = 0, cum_H = 0;
-  // Tensão começa em T2 na cauda (lado da volta entra como T2, na carga sai como T1)
-  // Modelo simplificado: T(x) = T2 + (Te) · (x/L_total) ao longo do ramo de carga
-  for (let i = 0; i <= npts; i++) {
-    const x = (L_total * i) / npts;
-    // Encontra o trecho atual
-    let acc = 0, h_acc = 0;
-    for (const seg of segments) {
-      if (acc + seg.comp >= x) {
-        const dx = x - acc;
-        h_acc += dx * Math.sin(seg.ang * Math.PI / 180);
-        break;
-      }
-      acc += seg.comp;
-      h_acc += seg.comp * Math.sin(seg.ang * Math.PI / 180);
-    }
-    const frac = x / L_total;
-    curve.push({
-      pos: +x.toFixed(1),
-      T_carga: +(T2 + Te * frac).toFixed(0),
-      T_volta: +(T2 - Tyr * frac + Tx * 0.4 * frac).toFixed(0),
-      h: +h_acc.toFixed(2),
+    const positiveReq = Object.values(req).filter(v => Number.isFinite(v) && v > 0);
+    const requiredR = positiveReq.length ? Math.max(...positiveReq) : NaN;
+    const marginPct = Number.isFinite(requiredR) ? ((actualR - requiredR) / requiredR) * 100 : NaN;
+    const status = !fits ? 'No fit' : !Number.isFinite(marginPct) ? 'OK' : marginPct >= 0 ? 'OK' : marginPct >= -20 ? 'Review' : 'Fail';
+    curves.push({
+      id: `CV-${i}`, type: kind, station: node.station, elev: node.elev,
+      startStation, endStation, deltaDeg: delta * 180 / Math.PI,
+      actualR, requiredR, marginPct, curveLengthM, status, localTensionKN, checks: req,
     });
   }
+  return { nodes, markers, totalLen, drivePos, curves };
+}
 
-  // ----- REGIME DE PARTIDA (CEMA 14.5) -----
-  const mass_belt_kg = Wb * L_total * 2;
-  const mass_mat_kg = Wm * L_total;
-  const mass_idlers_kg = (p_rol_carga / esp_rol + p_rol_ret / esp_rol_ret) * L_total;
-  const mass_total = mass_belt_kg + mass_mat_kg + mass_idlers_kg;
-  const a_start = V / t_start;
-  const Fi_start = mass_total * a_start;
-  const Te_start = Kst * Te + Fi_start;
-  const T1_start = Te_start * Cw / (Cw - 1);
-  const P_start_kw = Te_start * g * V / (1000 * ef_t);
-  const torque_peak_start = Te_start * (d_tamb_mm / 2000);
-  const start_ok = T1_start <= Tad;
+interface ValRow {
+  item: typeof VALIDATION_CASES[number];
+  calc: CalcResult;
+  deviations: { te: number; hp: number; t2: number; t1: number };
+  maxAbs: number;
+}
+interface AreaValRow {
+  id: string; label: string; unit: string; tolerancePct: number;
+  expected: number; calculated: number; delta: number; pass: boolean;
+}
+function compute(s: State): CalcResult {
+  const widthIn = s.beltWidthMm * IN_PER_MM;
+  const qShortTph = s.capacityTph * SHORT_TON_PER_METRIC_TON;
+  const vFpm = s.beltSpeed * FPM_PER_MPS;
+  const v0Fpm = s.materialEntrySpeed * FPM_PER_MPS;
+  const lengthFt = s.centerLengthM * FT_PER_M;
+  const liftFt = s.liftM * FT_PER_M;
+  const slopePct = lengthFt > 0 ? liftFt / lengthFt * 100 : NaN;
+  const spacingFt = s.idlerSpacingM * FT_PER_M;
 
-  // ----- REGIME DE FRENAGEM (CEMA 14.6) -----
-  const Fi_brake = mass_total * a_brake;
-  const Te_brake = Math.max(Math.abs(Te - Fi_brake), Te * 0.3);
-  const T1_brake = Te_brake * Cw / (Cw - 1);
-  const stop_distance = 0.5 * V * t_brake;
-  const brake_ok = T1_brake <= Tad;
+  const estimate = estimateBeltWeight(s.beltWidthMm, s.bulkDensity, s.steelCord);
+  const beltWeightLbft = s.useEstimatedBeltWeight ? estimate.lbft : kgpmToLbft(s.beltWeightKgPm);
+  const beltWeightKgPm = s.useEstimatedBeltWeight ? estimate.kgpm : s.beltWeightKgPm;
 
-  // ----- CHUTE ENTUPIDO -----
-  const F_shear_plug = chute_plug ? (mat_shear_kpa * 1000 * chute_area_m2) / g : 0;
-  const Te_plug = Te + F_shear_plug;
-  const T1_plug = Te_plug * Cw / (Cw - 1);
-  const Te_start_plug = Kst * Te_plug + Fi_start;
-  const T1_start_plug = Te_start_plug * Cw / (Cw - 1);
-  const torque_peak_worst = Te_start_plug * (d_tamb_mm / 2000);
-  const plug_ok = T1_start_plug <= Tad;
+  const wmLbft = vFpm > 0 ? (qShortTph * 2000) / (60 * vFpm) : NaN;
+  const wmKgPm = Number.isFinite(wmLbft) ? wmLbft * KGPM_PER_LBFT : NaN;
 
-  // ----- Vida dos Roletes L10 (CEMA Cap. 11) -----
-  const d_idler_m = (inp.d_idler_mm || 127) / 1000;
-  const n_roll = (V * 60) / (Math.PI * d_idler_m); // rpm do rolo
-  const C_brg = IDLER_BEARING_C[idler_cl] || IDLER_BEARING_C.D;
-  // Carga por rolamento: ramal de carga (3 rolos, 2 rolamentos cada)
-  const F_l_carga_N = (esp_rol * (Wb + Wm) * g) / (3 * 2);
-  // Ramal de retorno (2 rolos, 2 rolamentos cada)
-  const F_l_ret_N = (esp_rol_ret * Wb * g) / (2 * 2);
-  const L10_carga = Math.pow(C_brg / Math.max(F_l_carga_N, 1), 3) * (16_667 / Math.max(n_roll, 1));
-  const L10_ret = Math.pow(C_brg / Math.max(F_l_ret_N, 1), 3) * (16_667 / Math.max(n_roll, 1));
-  const L10_min = Math.min(L10_carga, L10_ret);
+  const idler = IDLER_FAMILIES.find(f => f.id === s.idlerFamily) || IDLER_FAMILIES[0];
+  const aiAdjusted = idler.ai * (s.twoRollVReturn ? 1.05 : 1.0);
+  const kxAuto = spacingFt > 0 ? (0.00068 * (beltWeightLbft + wmLbft) + aiAdjusted) / spacingFt : NaN;
+  const kxUsed = s.overrideKx ? s.manualKx : kxAuto;
 
-  // ----- Seleção de Correia -----
-  const SF_belt_std = 6.67; // CEMA: fator de segurança mínimo correia têxtil
-  const T1_N_per_mm = (T1_eff * g) / (larg_pol * 25.4); // N/mm = kN/m
-  const belt_rating_req = T1_N_per_mm * SF_belt_std; // N/mm necessário
-  const SF_belt_actual = cap_tens / T1_N_per_mm; // fator real (cap_tens em N/m → N/mm)
-  const belt_ok = SF_belt_actual >= SF_belt_std;
+  const txLbf = lengthFt * s.kt * kxUsed;
+  const tycLbf = lengthFt * s.ky * beltWeightLbft * s.kt;
+  const tyrLbf = lengthFt * 0.015 * beltWeightLbft * s.kt;
+  const tybLbf = tycLbf + tyrLbf;
+  const tymLbf = lengthFt * s.ky * wmLbft;
+  const tmLbf = liftFt * wmLbft;
+  const tbLbf = liftFt * beltWeightLbft;
+  const tpCountLbf = (s.tightPulleys * 200 + s.slackPulleys * 150 + s.otherPulleys * 100) * (s.plainBearings ? 2 : 1);
+  const tpLbf = s.overrideTp ? s.manualTpLbf : tpCountLbf;
+  const tamLbf = 0.00028755 * qShortTph * (vFpm - v0Fpm);
+  const tbcLbf = s.cleanerBlades * 5 * widthIn;
+  const tplLbf = s.fullPlows * 5 * widthIn + s.partialPlows * 3 * widthIn;
+  const skirtLengthFt = s.skirtLengthM * FT_PER_M;
+  const skirtDepthIn = s.skirtDepthMm * IN_PER_MM;
+  const tsbLbf = skirtLengthFt > 0 ? skirtLengthFt * (s.csFactor * skirtDepthIn * skirtDepthIn + (s.rubberEdging ? 6 : 0)) : 0;
+  const otherAccessoryLbf = knToLbf(s.otherAccessoryKN);
+  const tacLbf = tbcLbf + tplLbf + tsbLbf + otherAccessoryLbf;
 
-  // ----- Comprimento de transição (CEMA Cap. 8) -----
-  // Distância mínima para correia passar de plana para calha (λ)
-  const B_m = (larg_pol * 25.4) / 1000;
-  const transition_L = B_m * Math.tan((ang_rol * Math.PI) / 180) / Math.sin((18 * Math.PI) / 180);
+  // Plugged chute
+  const plugWidthM = s.pluggedWidthMm / 1000, plugHeightM = s.pluggedHeightMm / 1000;
+  const plugCrossAreaM2 = Math.max(plugWidthM * plugHeightM, 0);
+  const plugVolumeM3 = Math.max(plugCrossAreaM2 * s.pluggedLengthM, 0);
+  const plugWeightN = plugVolumeM3 * Math.max(s.bulkDensity, 0) * 1000 * G_MPS2;
+  const plugFrictionN = Math.max(s.pluggedWallFriction, 0) * plugWeightN;
+  const plugShearN = Math.max(s.pluggedShearStressKPa, 0) * 1000 * plugCrossAreaM2;
+  let pluggedFlowKN = 0, pluggedMethodBasis = 'Off';
+  if (s.pluggedChuteMode === 'shear') {
+    pluggedFlowKN = Math.max(plugFrictionN, plugShearN) / 1000;
+    pluggedMethodBasis = 'Shear + wall friction method';
+  } else if (s.pluggedChuteMode === 'manual') {
+    pluggedFlowKN = Math.max(s.manualPluggedFlowKN, 0);
+    pluggedMethodBasis = 'Manual force entry';
+  }
+  const pluggedStartupKN = Math.max(s.pluggedStartupFactor, 0) * pluggedFlowKN;
+  const pluggedStartupExtraKN = Math.max(pluggedStartupKN - pluggedFlowKN, 0);
+  const pluggedFlowLbf = knToLbf(pluggedFlowKN);
+  const pluggedStartupLbf = knToLbf(pluggedStartupKN);
+  const pluggedStartupExtraLbf = knToLbf(pluggedStartupExtraKN);
 
-  // ----- Tensões por junção (por trecho) -----
-  const junctions: { x: number; T: number; h: number; seg: number }[] = [];
-  let T_j = T2;
-  let x_j = 0, h_j = 0;
-  junctions.push({ x: 0, T: +T_j.toFixed(1), h: 0, seg: 0 });
-  segments.forEach((seg: any, idx: number) => {
-    const Tx_s = Kx * seg.comp;
-    const Ty_s = Ky * seg.comp * (Wb + Wm);
-    const Tm_s = Wm * seg.comp * Math.sin(seg.ang * Math.PI / 180);
-    const Tsb_s = Tsb * (seg.comp / Math.max(L_total, 1));
-    T_j += Tx_s + Ty_s + Tm_s + Tsb_s;
-    x_j += seg.comp;
-    h_j += seg.comp * Math.sin(seg.ang * Math.PI / 180);
-    junctions.push({ x: +x_j.toFixed(1), T: +T_j.toFixed(1), h: +h_j.toFixed(2), seg: idx + 1 });
-  });
+  const teBaseLbf = txLbf + tybLbf + tymLbf + tmLbf + tpLbf + tamLbf + tacLbf;
+  const teLbf = teBaseLbf + (s.pluggedApplyInFlow ? pluggedFlowLbf : 0);
+  const startupTeLbf = Math.max(teBaseLbf + pluggedStartupLbf, teLbf);
 
-  // ----- Fator de segurança geral -----
-  const SF_T1 = Tad / T1;
+  const beltHp = hpFromTeV(teLbf, vFpm);
+  const beltKw = beltHp * HP_TO_KW;
+  const startupBeltHp = hpFromTeV(startupTeLbf, vFpm);
+  const startupBeltKw = startupBeltHp * HP_TO_KW;
+  const efficiency = Math.max(s.driveEfficiencyPct / 100, 0.0001);
+  const motorKw = beltKw * s.serviceFactor / efficiency;
+  const motorHp = motorKw / HP_TO_KW;
+  const startupMotorKw = startupBeltKw * s.serviceFactor / efficiency;
+  const startupMotorHp = startupMotorKw / HP_TO_KW;
+
+  const sagFactor = s.sagPercent === 1.5 ? 8.4 : s.sagPercent === 2 ? 6.25 : 4.2;
+  const t0Lbf = sagFactor * spacingFt * (beltWeightLbft + wmLbft);
+  const t2SlipLbf = Math.abs(teLbf) * s.cw;
+  const t2SagLbf = Math.max(0, t0Lbf + tbLbf - tyrLbf);
+  const governingSource = t2SagLbf >= t2SlipLbf ? 'Sag' : 'Slip';
+  const t2Lbf = Math.max(t2SlipLbf, t2SagLbf, 0);
+  const t1Lbf = Math.abs(teLbf) + t2Lbf;
+  const counterweightLbf = 2 * t2Lbf;
+  const dutyMode = teLbf >= 0 ? 'Motoring' : 'Regenerative';
+
+  const requiredAreaM2 = (s.bulkDensity > 0 && s.beltSpeed > 0) ? (s.capacityTph / 3600) / (s.bulkDensity * s.beltSpeed) : NaN;
+  const fillModel = solveCrossSectionFill(s.beltWidthMm / 1000, s.troughAngleDeg, s.surchargeAngleDeg, requiredAreaM2);
+
+  const components: TensionComponent[] = [
+    { key: 'Tx',          label: 'Tx · Idler friction',                    lbf: txLbf,               basis: 'L × Kt × Kx' },
+    { key: 'Tyc',         label: 'Tyc · Belt flexure on carrying idlers',  lbf: tycLbf,              basis: 'L × Ky × Wb × Kt' },
+    { key: 'Tyr',         label: 'Tyr · Belt flexure on return idlers',    lbf: tyrLbf,              basis: 'L × 0.015 × Wb × Kt' },
+    { key: 'Tym',         label: 'Tym · Material flexure',                 lbf: tymLbf,              basis: 'L × Ky × Wm' },
+    { key: 'Tm',          label: 'Tm · Lift / lower material',             lbf: tmLbf,               basis: 'H × Wm' },
+    { key: 'Tp',          label: 'Tp · Pulley resistance',                 lbf: tpLbf,               basis: 'Table 6-5 count method' },
+    { key: 'Tam',         label: 'Tam · Accelerate feed',                  lbf: tamLbf,              basis: '0.00028755 × Q × (V − Vo)' },
+    { key: 'Tbc',         label: 'Tbc · Belt cleaners',                    lbf: tbcLbf,              basis: '5 lb/in × blades × belt width' },
+    { key: 'Tpl',         label: 'Tpl · Plows',                            lbf: tplLbf,              basis: '5 or 3 lb/in × belt width' },
+    { key: 'Tsb',         label: 'Tsb · Skirtboards',                      lbf: tsbLbf,              basis: 'Lb × (Cs × hs² + 6)' },
+    { key: 'Tother',      label: 'Other accessory tension',                lbf: otherAccessoryLbf,   basis: 'Manual kN adder' },
+    { key: 'TplugFlow',   label: 'Tplug(flow) · Plugged chute in flow',   lbf: pluggedFlowLbf,      basis: pluggedMethodBasis },
+    { key: 'TplugStartX', label: 'Tplug(start extra) · Extra breakout',   lbf: pluggedStartupExtraLbf, basis: `Startup factor ${fmtFixed(s.pluggedStartupFactor, 2)} × flow` },
+  ].map(item => ({ ...item, kw: componentKwFromLbf(item.lbf, vFpm) }));
+
+  const profile = computeProfileAndCurves(s, { teLbf, t2Lbf, t1Lbf, wmKgPm, beltWeightKgPm });
 
   return {
-    ang_abr_real, T2_factor, T1_eff,
-    mass_total, a_start, Fi_start, Te_start, T1_start, P_start_kw, torque_peak_start, start_ok,
-    a_brake, Fi_brake, Te_brake, T1_brake, stop_distance, brake_ok,
-    F_shear_plug, Te_plug, T1_plug, Te_start_plug, T1_start_plug, torque_peak_worst, plug_ok,
-    // Geometria
-    L_total, L_h, H_total, beta_eq,
-    // Material
-    fa, fa_ref, Ku, V_min, V, cap_vol_real, cap_real, Wm,
-    // Coeficientes
-    Ky, Kx,
-    // Resistências
-    Tx, Ty, Tyr, Tyc, Tm, Tb, Tsb, Tbc, Tpl, Tam, Te,
-    // Potência
-    Ne_kw, N_kw, N_hp, N_cv, N_per_kw, N_per_hp, ef_t,
-    // Rotação
-    n_sinc, n_mot, n_tamb, i_red,
-    // Tensões
-    Cw, T1, T2, Tad, T_sag, T_sag_carga, T_sag_ret,
-    // Tensionamento
-    Wcp, screw_travel, auto_force,
-    // Curvas
-    radii, angle_violations,
-    // Perfil
-    curve,
-    // Status
-    cap_ok: cap_real >= cap_th,
-    tension_ok: T1 <= Tad,
-    sag_ok: T2 >= T_sag,
-    angle_ok: angle_violations.length === 0,
-    // Vida roletes
-    d_idler_m, n_roll, C_brg, F_l_carga_N, F_l_ret_N, L10_carga, L10_ret, L10_min,
-    // Seleção correia
-    T1_N_per_mm, belt_rating_req, SF_belt_actual, SF_belt_std, belt_ok,
-    // Transição
-    transition_L,
-    // Junções
-    junctions,
-    // Fatores de segurança
-    SF_T1,
+    ...s, widthIn, vFpm, v0Fpm, qShortTph, lengthFt, liftFt, slopePct, spacingFt,
+    estimate, beltWeightLbft, beltWeightKgPm, wmLbft, wmKgPm,
+    aiAdjusted, kxAuto, kxUsed,
+    txLbf, tycLbf, tyrLbf, tybLbf, tymLbf, tmLbf, tbLbf,
+    tpCountLbf, tpLbf, tamLbf, tbcLbf, tplLbf, tsbLbf, otherAccessoryLbf, tacLbf,
+    pluggedFlowKN, pluggedStartupKN, pluggedStartupExtraKN,
+    pluggedFlowLbf, pluggedStartupLbf, pluggedStartupExtraLbf, pluggedMethodBasis,
+    teBaseLbf, teLbf, startupTeLbf,
+    beltHp, beltKw, startupBeltHp, startupBeltKw,
+    motorKw, motorHp, startupMotorKw, startupMotorHp,
+    t0Lbf, t2SlipLbf, t2SagLbf, t2Lbf, t1Lbf, counterweightLbf, dutyMode, governingSource,
+    requiredAreaM2, fillModel, occupiedAreaM2: fillModel.occupiedAreaM2,
+    cemaAvailableAreaM2: fillModel.cemaAvailableAreaM2, maxAreaM2: fillModel.maxAreaM2,
+    edgeDistanceM: fillModel.edgeDistanceM, totalEdgeClearanceM: fillModel.totalEdgeClearanceM,
+    fillAreaPct: fillModel.fillToAvailableRatio * 100, fillToMaxPct: fillModel.fillToMaxRatio * 100,
+    components, profile,
   };
 }
 
-// ============================================================
-// AVISOS / VALIDAÇÃO
-// ============================================================
-function generateWarnings(inp: any, res: any) {
-  const items: { level: "ok" | "warn" | "bad"; text: string }[] = [];
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 5 — VALIDATION CASES (AGH/CEMA + Rulmeca)
+// ─────────────────────────────────────────────────────────────────────────────
 
-  if (!res.tension_ok) items.push({ level: "bad",
-    text: `T1 (${res.T1.toFixed(0)} kgf) excede a tensão admissível Tad (${res.Tad.toFixed(0)} kgf). Aumente lonas, capacidade da correia ou reduza Te.` });
+const VALIDATION_CASES = [
+  {
+    id: 'aghCema5', label: 'AGH / CEMA worked example',
+    source: 'Published CEMA-style worked example',
+    note: 'Source rounds Wm to 55 lb/ft, so very small residual differences are expected.',
+    input: {
+      ...DEFAULTS, projectName: 'Validation - AGH CEMA 5', conveyorTag: 'VAL-AGH',
+      capacityTph: 1000 / SHORT_TON_PER_METRIC_TON, beltSpeed: 600 / FPM_PER_MPS,
+      materialEntrySpeed: 0, centerLengthM: 3300 / FT_PER_M, liftM: 115 / FT_PER_M,
+      beltWidthMm: 42 * 25.4, bulkDensity: 0.96,
+      useEstimatedBeltWeight: false, beltWeightKgPm: 11 / LBFT_PER_KGPM,
+      idlerSpacingM: 4.5 / FT_PER_M, sagPercent: 2, idlerFamily: 'B4_C4_4in',
+      twoRollVReturn: false, overrideKx: true, manualKx: 0.555, ky: 0.0214, kt: 1.0,
+      cwPreset: 'manual', cw: 0.08, tightPulleys: 2, slackPulleys: 3, otherPulleys: 0,
+      plainBearings: false, overrideTp: false, manualTpLbf: 0,
+      cleanerBlades: 0, fullPlows: 0, partialPlows: 0,
+      skirtLengthM: 10 / FT_PER_M, skirtDepthMm: 10 * 25.4, csFactor: 0.0538,
+      rubberEdging: true, otherAccessoryKN: 0, driveEfficiencyPct: 94, serviceFactor: 1.0,
+    },
+    expected: { teLbf: 14598.2, beltHp: 265.4, t2Lbf: 2567.7, t1Lbf: 17165.9 },
+  },
+  {
+    id: 'rulmecaWorkbook', label: 'Rulmeca public workbook sample',
+    source: 'Public Design-Imperial-7.31 workbook sample',
+    note: 'Manual Tp override used to match the workbook project-specific pulley-resistance treatment.',
+    input: {
+      ...DEFAULTS, projectName: 'Validation - Rulmeca', conveyorTag: 'VAL-RUL',
+      capacityTph: 500 / SHORT_TON_PER_METRIC_TON, beltSpeed: 300 / FPM_PER_MPS,
+      materialEntrySpeed: 0, centerLengthM: 100 / FT_PER_M, liftM: 0,
+      beltWidthMm: 36 * 25.4, bulkDensity: 1.0,
+      useEstimatedBeltWeight: false, beltWeightKgPm: 9 / LBFT_PER_KGPM,
+      idlerSpacingM: 4 / FT_PER_M, sagPercent: 2, idlerFamily: 'B5_C5_D5_5in',
+      twoRollVReturn: false, overrideKx: true, manualKx: 0.493894, ky: 0.035,
+      kt: 1.58855494575869, cwPreset: 'manual', cw: 0.5,
+      tightPulleys: 0, slackPulleys: 0, otherPulleys: 0, plainBearings: false,
+      overrideTp: true, manualTpLbf: 19.387, cleanerBlades: 1,
+      fullPlows: 0, partialPlows: 0, skirtLengthM: 12 / FT_PER_M, skirtDepthMm: 3 * 25.4,
+      csFactor: 0.128, rubberEdging: true, otherAccessoryKN: 0,
+      driveEfficiencyPct: 94, serviceFactor: 1.0,
+    },
+    expected: { teLbf: 672.711248197195, beltHp: 6.11555680179268, t2Lbf: 1592.30450823226, t1Lbf: 2265.01575642945 },
+  },
+];
 
-  if (!res.cap_ok) items.push({ level: "bad",
-    text: `Capacidade real (${res.cap_real.toFixed(0)} t/h) < requerida (${inp.cap_th} t/h). Aumente velocidade, largura ou densidade.` });
+const AREA_VALIDATION_CASES = [
+  { id: 'occupiedAreaIdentity', label: 'Occupied area from Q / (3600 × ρ × v)', unit: 'm²', tolerancePct: 0.01, expected: 1200 / (3600 * 1.60 * 3.00), calculated: () => compute({ ...DEFAULTS, capacityTph: 1200, bulkDensity: 1.60, beltSpeed: 3.00 }).occupiedAreaM2 },
+  { id: 'available35x36', label: 'Available area · 36 in · 35° trough · 20° surcharge', unit: 'm²', tolerancePct: 0.5, expected: 0.092903, calculated: () => interpolateAvailableAreaM2(36 * 0.0254, 35, 20) },
+  { id: 'available45x48', label: 'Available area · 48 in · 45° trough · 20° surcharge', unit: 'm²', tolerancePct: 0.5, expected: 0.198193, calculated: () => interpolateAvailableAreaM2(48 * 0.0254, 45, 20) },
+  { id: 'edgeClearance1200', label: 'Edge clearance · 1200 mm belt', unit: 'mm', tolerancePct: 0.01, expected: 2 * (0.05 * 1200 + 25), calculated: () => 2 * edgeDistancePerSideM(1.2) * 1000 },
+];
 
-  if (!res.angle_ok) {
-    res.angle_violations.forEach((v: any) => items.push({ level: "bad",
-      text: `Trecho ${v.idx + 1}: ângulo ${v.ang.toFixed(1)}° excede o máximo do material (${v.max}°). Risco de escorregamento/derrame.` }));
-  }
-
-  if (!res.sag_ok) items.push({ level: "warn",
-    text: `T2 (${res.T2.toFixed(0)} kgf) abaixo do sag mínimo (${res.T_sag.toFixed(0)} kgf). Aumente o contrapeso para evitar derrame entre roletes.` });
-
-  if (res.i_red < 8) items.push({ level: "warn",
-    text: `Redução baixa (${res.i_red.toFixed(1)}:1). Verifique disponibilidade comercial.` });
-  if (res.i_red > 80) items.push({ level: "warn",
-    text: `Redução alta (${res.i_red.toFixed(1)}:1). Considere estágio extra.` });
-
-  if (inp.ang_abr < 180) items.push({ level: "warn",
-    text: `Ângulo de abraçamento ${inp.ang_abr}° < 180°. Use snub pulley para aumentar Cw.` });
-
-  if (res.Ku > 1.0) items.push({ level: "warn",
-    text: `Fator de utilização Ku=${res.Ku.toFixed(2)} > 1.0. A seção opera acima da referência CEMA — verifique transbordamento.` });
-  if (res.Ku < 0.5) items.push({ level: "warn",
-    text: `Fator de utilização Ku=${res.Ku.toFixed(2)} < 0.5. Correia subutilizada — considere reduzir largura.` });
-
-  if (res.N_per_kw > 200) items.push({ level: "warn",
-    text: `Potência por acionamento alta (${res.N_per_kw.toFixed(0)} kW). Considere mais acionamentos.` });
-
-  if (res.radii.R_concave > 100) items.push({ level: "warn",
-    text: `Raio mínimo de curva côncava elevado (${res.radii.R_concave.toFixed(0)} m). Verifique geometria do perfil.` });
-
-  if (res.start_ok === false) items.push({ level: "bad",
-    text: `Partida: T1 (${res.T1_start.toFixed(0)} kgf) excede Tad durante aceleração. Aumente t_start, reduza Kst ou use soft-starter/inversor.` });
-
-  if (res.brake_ok === false) items.push({ level: "bad",
-    text: `Frenagem: T1 (${res.T1_brake.toFixed(0)} kgf) excede Tad na desaceleração. Aumente t_brake ou reduza a_brake.` });
-
-  if (inp.chute_plug && !res.plug_ok) items.push({ level: "bad",
-    text: `Chute entupido + partida: T1 (${res.T1_start_plug.toFixed(0)} kgf) > Tad. Instalar detector de chute obstruído + intertravamento com acionamento.` });
-
-  if (inp.chute_plug && res.plug_ok) items.push({ level: "warn",
-    text: `Chute entupido considerado no dimensionamento. Torque de pico no acionamento: ${res.torque_peak_worst.toFixed(0)} N.m. Verifique se motor/redutor suportam.` });
-
-  if (!items.length) items.push({ level: "ok",
-    text: "Todos os critérios CEMA 7th Ed. atendidos. O transportador opera dentro dos limites recomendados." });
-
-  return items;
+function deviationPct(actual: number, expected: number) {
+  if (!Number.isFinite(actual) || !Number.isFinite(expected) || expected === 0) return NaN;
+  return ((actual - expected) / expected) * 100;
 }
 
-// ============================================================
-// EDITOR 2D INTERATIVO — Tambores arrastáveis + Multi-trecho
-// ============================================================
-function InteractiveProfile2D({ inp, res, palette, pulleys, setPulleys, onSegmentChange }: any) {
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const [dragging, setDragging] = useState<number | null>(null);
-  const [hover, setHover] = useState<number | null>(null);
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 6 — SVG RENDERERS (pure functions → string)
+// ─────────────────────────────────────────────────────────────────────────────
 
-  // Calcula bounding box do perfil
-  const segs = inp.segments;
-  const W = 760, H = 380;
-  const padX = 60, padY = 50;
+function svgSchematic(r: CalcResult, w: number, h: number): string {
+  const margin = { left: 32, right: 24, top: 24, bottom: 34 };
+  const baseY = h - 64;
+  const x0 = margin.left + 40, x1 = w - margin.right - 36;
+  const maxRise = 110;
+  const liftFrac = r.liftM !== 0 ? clamp(Math.abs(r.liftM) / Math.max(Math.abs(r.liftM), 1), 0, 1) : 0;
+  const actualHeadY = clamp(baseY - liftFrac * maxRise * (r.liftM >= 0 ? 1 : -1), 80, h - 80);
+  const actualTailY = baseY;
+  const beltTop = `M ${x0} ${actualTailY} L ${x1} ${actualHeadY}`;
+  const beltBottom = `M ${x0} ${actualTailY + 12} L ${x1} ${actualHeadY + 12}`;
+  const driveCy = actualHeadY + 6, tailCy = actualTailY + 6;
+  const idlers = Array.from({ length: 6 }, (_, i) => {
+    const t = i / 5, x = x0 + (x1 - x0) * t, y = actualTailY + (actualHeadY - actualTailY) * t + 16;
+    return `<line x1="${x - 14}" y1="${y}" x2="${x + 14}" y2="${y}" stroke="#7b715f" stroke-width="3" stroke-linecap="round"/>`;
+  }).join('');
+  const arrowX = x0 + (x1 - x0) * 0.58, arrowY = actualTailY + (actualHeadY - actualTailY) * 0.58 - 8;
+  const modeLabel = r.dutyMode === 'Regenerative' ? 'Regenerative tendency' : 'Head drive motoring duty';
+  return `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Conveyor schematic">
+    <defs><marker id="arrowGold" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#cfac6d"/></marker></defs>
+    <rect x="0" y="0" width="${w}" height="${h}" fill="transparent"/>
+    <path d="${beltTop}" fill="none" stroke="#8f816b" stroke-width="8" stroke-linecap="round"/>
+    <path d="${beltBottom}" fill="none" stroke="#bca98d" stroke-width="5" stroke-linecap="round" opacity="0.75"/>
+    ${idlers}
+    <circle cx="${x0}" cy="${tailCy}" r="16" fill="rgba(207,172,109,.18)" stroke="#8f816b" stroke-width="2"/>
+    <circle cx="${x1}" cy="${driveCy}" r="18" fill="rgba(207,172,109,.22)" stroke="#8f816b" stroke-width="2.4"/>
+    <circle cx="${x1}" cy="${driveCy}" r="7" fill="#cfac6d" opacity="0.8"/>
+    <line x1="${arrowX - 36}" y1="${arrowY}" x2="${arrowX + 36}" y2="${arrowY + (actualHeadY - actualTailY) * 0.18}" stroke="#cfac6d" stroke-width="3" marker-end="url(#arrowGold)"/>
+    <line x1="${x1 + 24}" y1="${actualTailY + 8}" x2="${x1 + 24}" y2="${driveCy}" stroke="#7b715f" stroke-width="1.4" stroke-dasharray="5 4"/>
+    <line x1="${x0}" y1="${actualTailY + 46}" x2="${x1}" y2="${actualHeadY + 46}" stroke="#7b715f" stroke-width="1.4"/>
+    <polygon points="${x0},${actualTailY + 46} ${x0 + 8},${actualTailY + 42} ${x0 + 8},${actualTailY + 50}" fill="#7b715f"/>
+    <polygon points="${x1},${actualHeadY + 46} ${x1 - 8},${actualHeadY + 42} ${x1 - 8},${actualHeadY + 50}" fill="#7b715f"/>
+    <text x="${(x0 + x1) / 2}" y="${(actualTailY + actualHeadY) / 2 + 60}" text-anchor="middle" font-size="12" fill="#555">Center length ${fmtFixed(r.centerLengthM, 1)} m</text>
+    <text x="${x1 + 28}" y="${(actualTailY + driveCy) / 2}" font-size="12" fill="#555">${fmtFixed(r.liftM, 1)} m</text>
+    <text x="${x0}" y="36" font-size="13" font-weight="800" fill="currentColor">${r.projectName || 'Project'} · ${r.conveyorTag || 'Tag'}</text>
+    <text x="${x0}" y="56" font-size="12" fill="#666">Capacity ${fmtFixed(r.capacityTph, 0)} t/h · Speed ${fmtFixed(r.beltSpeed, 2)} m/s · Width ${fmtFixed(r.beltWidthMm, 0)} mm</text>
+    <text x="${x0}" y="76" font-size="12" fill="#666">Wm ${fmtFixed(r.wmKgPm, 1)} kg/m · Wb ${fmtFixed(r.beltWeightKgPm, 1)} kg/m · Sag ${fmtFixed(r.sagPercent, 1)}%</text>
+    <text x="${x0}" y="96" font-size="12" fill="#666">Kt ${fmtFixed(r.kt, 2)} · Ky ${fmtFixed(r.ky, 4)} · Kx ${fmtFixed(r.kxUsed, 4)} · Cw ${fmtFixed(r.cw, 2)}</text>
+    <text x="${x0}" y="116" font-size="12" fill="#666">${modeLabel}</text>
+    <text x="${x1}" y="${driveCy - 26}" text-anchor="middle" font-size="12" font-weight="700" fill="#555">Drive</text>
+    <text x="${x0}" y="${tailCy - 26}" text-anchor="middle" font-size="12" font-weight="700" fill="#555">Tail</text>
+  </svg>`;
+}
 
-  // Pontos do perfil (cauda → cabeça) integrando segmentos
-  const profilePts: { x: number; y: number; xm: number; ym: number }[] = [];
-  let cx = 0, cy = 0;
-  profilePts.push({ x: 0, y: 0, xm: 0, ym: 0 });
-  for (const seg of segs) {
-    const dx = seg.comp * Math.cos(seg.ang * Math.PI / 180);
-    const dy = seg.comp * Math.sin(seg.ang * Math.PI / 180);
-    cx += dx; cy += dy;
-    profilePts.push({ x: cx, y: cy, xm: cx, ym: cy });
-  }
-
-  const maxX = Math.max(...profilePts.map(p => p.x)) || 1;
-  const minY = Math.min(...profilePts.map(p => p.y));
-  const maxY = Math.max(...profilePts.map(p => p.y));
-  const rangeY = (maxY - minY) || 1;
-
-  // Escala (preserva aspecto razoável)
-  const sx = (W - 2 * padX) / maxX;
-  const sy = (H - 2 * padY) / Math.max(rangeY * 1.5, 5);
-
-  const toScreen = (xm: number, ym: number) => ({
-    x: padX + xm * sx,
-    y: H - padY - (ym - minY) * sy,
+function svgBreakdownChart(r: CalcResult, w: number, h: number): string {
+  const margin = { left: 170, right: 26, top: 18, bottom: 28 };
+  const rows = r.components;
+  const rowH = (h - margin.top - margin.bottom) / Math.max(rows.length, 1);
+  const values = rows.map(c => c.lbf);
+  const minValue = Math.min(0, ...values), maxValue = Math.max(0, ...values);
+  const span = Math.max(maxValue - minValue, 1);
+  const barScale = (v: number) => margin.left + ((v - minValue) / span) * (w - margin.left - margin.right);
+  const zeroX = barScale(0);
+  const lines: string[] = [];
+  lines.push(`<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Tension breakdown chart"><rect x="0" y="0" width="${w}" height="${h}" fill="transparent"/>`);
+  [-1, -0.5, 0, 0.5, 1].forEach(f => {
+    const v = minValue + (span * (f + 1) / 2), x = barScale(v);
+    lines.push(`<line x1="${x}" y1="${margin.top}" x2="${x}" y2="${h - margin.bottom}" stroke="rgba(122,112,94,.18)"/>`);
+    lines.push(`<text x="${x}" y="${h - 8}" text-anchor="middle" font-size="11" fill="#777">${fmtFixed(lbfToKn(v), 1)}</text>`);
   });
-
-  // Linha da correia (lado de carga - superior)
-  const beltTop = profilePts.map(p => toScreen(p.x, p.y));
-  // Lado de retorno (offset paralelo abaixo)
-  const beltOffset = 18;
-  const beltBot = beltTop.map(p => ({ x: p.x, y: p.y + beltOffset }));
-
-  // Drag handler
-  const onMouseDown = (i: number) => (e: any) => {
-    e.preventDefault();
-    setDragging(i);
-  };
-  const onMouseMove = (e: any) => {
-    if (dragging === null || !svgRef.current) return;
-    const rect = svgRef.current.getBoundingClientRect();
-    const px = ((e.clientX - rect.left) * W) / rect.width;
-    const xm = (px - padX) / sx;
-    setPulleys((prev: any[]) => prev.map((p, i) => i === dragging ? { ...p, x: Math.max(0, Math.min(maxX, xm)) } : p));
-  };
-  const onMouseUp = () => setDragging(null);
-
-  return (
-    <div style={{ position: "relative" }}>
-      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`}
-        style={{ width: "100%", background: palette.bg1, borderRadius: 8, border: `1px solid ${palette.border}`, cursor: dragging !== null ? "grabbing" : "default" }}
-        onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}>
-
-        {/* Grid */}
-        <defs>
-          <pattern id="grid-tp" width="40" height="40" patternUnits="userSpaceOnUse">
-            <path d="M 40 0 L 0 0 0 40" fill="none" stroke={palette.border} strokeWidth="0.5" opacity="0.4"/>
-          </pattern>
-          <linearGradient id="belt-grad" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor={palette.copper} stopOpacity="0.3"/>
-            <stop offset="100%" stopColor={palette.copper} stopOpacity="0.1"/>
-          </linearGradient>
-        </defs>
-        <rect width={W} height={H} fill="url(#grid-tp)"/>
-
-        {/* Eixo de elevação (esquerda) */}
-        <line x1={padX - 5} y1={padY} x2={padX - 5} y2={H - padY} stroke={palette.muted} strokeWidth="1"/>
-        <text x={padX - 10} y={padY + 5} fill={palette.muted} fontSize="9" textAnchor="end">{maxY.toFixed(1)}m</text>
-        <text x={padX - 10} y={H - padY + 3} fill={palette.muted} fontSize="9" textAnchor="end">{minY.toFixed(1)}m</text>
-        <text x={padX - 35} y={H / 2} fill={palette.muted} fontSize="9" textAnchor="middle" transform={`rotate(-90 ${padX - 35} ${H / 2})`}>Elevação (m)</text>
-
-        {/* Eixo horizontal */}
-        <line x1={padX} y1={H - padY + 8} x2={W - padX} y2={H - padY + 8} stroke={palette.muted} strokeWidth="1"/>
-        <text x={padX} y={H - padY + 22} fill={palette.muted} fontSize="9">0m</text>
-        <text x={W - padX} y={H - padY + 22} fill={palette.muted} fontSize="9" textAnchor="end">{maxX.toFixed(1)}m</text>
-        <text x={W / 2} y={H - 8} fill={palette.muted} fontSize="9" textAnchor="middle">Comprimento horizontal</text>
-
-        {/* Material no lado de carga (área preenchida) */}
-        <path d={
-          "M " + beltTop.map(p => `${p.x},${p.y}`).join(" L ") +
-          " L " + beltTop.slice().reverse().map(p => `${p.x},${p.y - 8}`).join(" L ") + " Z"
-        } fill="url(#belt-grad)" stroke="none"/>
-
-        {/* Correia - lado de carga */}
-        <polyline points={beltTop.map(p => `${p.x},${p.y}`).join(" ")}
-          fill="none" stroke={palette.primary} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
-        {/* Correia - retorno */}
-        <polyline points={beltBot.map(p => `${p.x},${p.y}`).join(" ")}
-          fill="none" stroke={palette.primaryDark} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.7"/>
-
-        {/* Marcações dos vértices entre trechos (com ângulos) */}
-        {beltTop.map((p, i) => i > 0 && i < beltTop.length - 1 && (
-          <g key={`v${i}`}>
-            <circle cx={p.x} cy={p.y} r="4" fill={palette.copper} stroke={palette.bg1} strokeWidth="1.5"/>
-            <text x={p.x} y={p.y - 10} fill={palette.copper} fontSize="9" textAnchor="middle" fontWeight="600">
-              {segs[i].ang > 0 ? "+" : ""}{segs[i].ang}°
-            </text>
-          </g>
-        ))}
-
-        {/* Tambores (arrastáveis) */}
-        {pulleys.map((p: any, i: number) => {
-          // encontra y na correia interpolando
-          let y = beltTop[0].y;
-          for (let k = 0; k < profilePts.length - 1; k++) {
-            if (p.x >= profilePts[k].x && p.x <= profilePts[k + 1].x) {
-              const f = (p.x - profilePts[k].x) / (profilePts[k + 1].x - profilePts[k].x || 1);
-              y = beltTop[k].y + f * (beltTop[k + 1].y - beltTop[k].y);
-              break;
-            }
-          }
-          if (p.x >= profilePts[profilePts.length - 1].x) y = beltTop[beltTop.length - 1].y;
-          const sp = toScreen(p.x, 0);
-          const px = sp.x;
-          const py = p.side === "top" ? y : y + beltOffset;
-          const r = p.type === "drive" ? 13 : p.type === "tail" ? 11 : 9;
-          const color = p.type === "drive" ? palette.copper :
-                        p.type === "tail" ? palette.primary :
-                        p.type === "takeup" ? palette.warn :
-                        p.type === "snub" ? palette.muted : palette.primaryLight;
-          return (
-            <g key={i} style={{ cursor: "grab" }}
-              onMouseDown={onMouseDown(i)} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
-              <circle cx={px} cy={py} r={r + 2} fill={palette.bg1} stroke={color} strokeWidth="2.5"/>
-              <circle cx={px} cy={py} r={r - 2} fill={color} opacity="0.6"/>
-              <text x={px} y={py + 3} fill={palette.text} fontSize="8" textAnchor="middle" fontWeight="700">{p.label}</text>
-              {hover === i && (
-                <g>
-                  <rect x={px - 60} y={py - 38} width={120} height={28} rx={4} fill={palette.bg0} stroke={color} strokeWidth="1"/>
-                  <text x={px} y={py - 24} fill={palette.text} fontSize="9" textAnchor="middle" fontWeight="600">{p.name}</text>
-                  <text x={px} y={py - 14} fill={palette.muted} fontSize="8" textAnchor="middle">x = {p.x.toFixed(1)}m</text>
-                </g>
-              )}
-            </g>
-          );
-        })}
-
-        {/* Legenda de status */}
-        <g transform={`translate(${W - 180}, 12)`}>
-          <rect x={0} y={0} width={170} height={42} rx={5} fill={palette.bg0} stroke={palette.border}/>
-          <text x={8} y={14} fill={palette.muted} fontSize="8" fontWeight="600">PERFIL CALCULADO</text>
-          <text x={8} y={26} fill={palette.text} fontSize="8">L = {res?.L_total?.toFixed(1) || "—"}m  ·  H = {res?.H_total?.toFixed(1) || "—"}m</text>
-          <text x={8} y={37} fill={palette.text} fontSize="8">β eq = {res?.beta_eq?.toFixed(1) || "—"}°  ·  T1 = {res?.T1?.toFixed(0) || "—"} kgf</text>
-        </g>
-      </svg>
-
-      <div style={{ marginTop: 8, fontSize: 10, color: palette.muted, display: "flex", gap: 16, flexWrap: "wrap" }}>
-        <span>● <strong style={{ color: palette.copper }}>Motor</strong></span>
-        <span>● <strong style={{ color: palette.primary }}>Cauda</strong></span>
-        <span>● <strong style={{ color: palette.warn }}>Tensionamento</strong></span>
-        <span>● <strong style={{ color: palette.muted }}>Snub/Bend</strong></span>
-        <span>· Arraste os tambores para reposicionar</span>
-      </div>
-    </div>
-  );
+  lines.push(`<line x1="${zeroX}" y1="${margin.top}" x2="${zeroX}" y2="${h - margin.bottom}" stroke="#8f816b" stroke-width="1.8"/>`);
+  rows.forEach((item, index) => {
+    const y = margin.top + index * rowH + 6;
+    const x = barScale(item.lbf), barX = Math.min(zeroX, x), barW = Math.max(Math.abs(x - zeroX), 1);
+    const fill = item.lbf >= 0 ? '#cfac6d' : '#8f4454';
+    lines.push(`<text x="${margin.left - 10}" y="${y + rowH / 2 + 4}" text-anchor="end" font-size="12" fill="currentColor">${item.key}</text>`);
+    lines.push(`<rect x="${barX}" y="${y}" width="${barW}" height="${rowH - 12}" rx="8" fill="${fill}" opacity="0.82"/>`);
+    lines.push(`<text x="${item.lbf >= 0 ? barX + barW + 6 : barX - 6}" y="${y + rowH / 2 + 4}" text-anchor="${item.lbf >= 0 ? 'start' : 'end'}" font-size="11" fill="#666">${fmtFixed(lbfToKn(item.lbf), 2)} kN</text>`);
+  });
+  lines.push(`<text x="${w / 2}" y="14" text-anchor="middle" font-size="12" fill="#666">Contribution to effective tension, Te (kN at belt line)</text></svg>`);
+  return lines.join('');
 }
 
-// ============================================================
-// SEÇÃO TRANSVERSAL — Área de enchimento (CEMA)
-// ============================================================
-function CrossSection({ inp, res, palette }: any) {
-  const W = 360, H = 260;
-  const cx = W / 2, cy = H * 0.65;
-  const B_mm = inp.larg_pol * 25.4;
-  const scale = (W * 0.7) / (B_mm / 1000);
-  const B = (B_mm / 1000) * scale;
-  const lambda = inp.ang_rol * Math.PI / 180;
-  const phi_s = inp.phi_s * Math.PI / 180;
-  const b_util = (B_mm / 1000 * 0.9 - 0.05) * scale;
-  const ll = b_util / 3;
-
-  // 3 roletes
-  const x_ll = cx - ll / 2;
-  const x_lr = cx + ll / 2;
-  const lat_dx = ((b_util - ll) / 2) * Math.cos(lambda);
-  const lat_dy = ((b_util - ll) / 2) * Math.sin(lambda);
-
-  const x_left = x_ll - lat_dx;
-  const y_left = cy - lat_dy;
-  const x_right = x_lr + lat_dx;
-  const y_right = cy - lat_dy;
-
-  // Cap do material
-  const bs = (x_right - x_left);
-  const cap_h = (bs / 2) * Math.tan(phi_s);
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: palette.bg1, borderRadius: 8, border: `1px solid ${palette.border}` }}>
-      <defs>
-        <linearGradient id="cs-mat" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor={palette.copper} stopOpacity="0.7"/>
-          <stop offset="100%" stopColor={palette.copperDark} stopOpacity="0.9"/>
-        </linearGradient>
-      </defs>
-
-      {/* Material (área de enchimento) */}
-      <path d={`
-        M ${x_left} ${y_left}
-        L ${x_ll} ${cy}
-        L ${x_lr} ${cy}
-        L ${x_right} ${y_right}
-        Q ${cx} ${y_left - cap_h * 1.4}, ${x_left} ${y_left}
-        Z
-      `} fill="url(#cs-mat)" stroke={palette.copper} strokeWidth="1.5"/>
-
-      {/* Correia */}
-      <line x1={x_left - 8} y1={y_left + 4} x2={x_ll} y2={cy + 4} stroke={palette.primary} strokeWidth="4" strokeLinecap="round"/>
-      <line x1={x_ll} y1={cy + 4} x2={x_lr} y2={cy + 4} stroke={palette.primary} strokeWidth="4" strokeLinecap="round"/>
-      <line x1={x_lr} y1={cy + 4} x2={x_right + 8} y2={y_right + 4} stroke={palette.primary} strokeWidth="4" strokeLinecap="round"/>
-
-      {/* Roletes */}
-      <line x1={x_left - 12} y1={y_left + 8} x2={x_ll - 4} y2={cy + 8} stroke={palette.muted} strokeWidth="6" strokeLinecap="round"/>
-      <line x1={x_ll - 2} y1={cy + 8} x2={x_lr + 2} y2={cy + 8} stroke={palette.muted} strokeWidth="6" strokeLinecap="round"/>
-      <line x1={x_lr + 4} y1={cy + 8} x2={x_right + 12} y2={y_right + 8} stroke={palette.muted} strokeWidth="6" strokeLinecap="round"/>
-
-      {/* Cotas */}
-      <line x1={x_left} y1={H - 20} x2={x_right} y2={H - 20} stroke={palette.muted} strokeWidth="0.8"/>
-      <line x1={x_left} y1={H - 24} x2={x_left} y2={H - 16} stroke={palette.muted} strokeWidth="0.8"/>
-      <line x1={x_right} y1={H - 24} x2={x_right} y2={H - 16} stroke={palette.muted} strokeWidth="0.8"/>
-      <text x={cx} y={H - 8} fill={palette.muted} fontSize="9" textAnchor="middle">B útil = {((B_mm / 1000 * 0.9 - 0.05) * 1000).toFixed(0)} mm</text>
-
-      {/* Ângulos */}
-      <text x={x_left - 4} y={y_left - 6} fill={palette.primary} fontSize="9" textAnchor="end" fontWeight="600">λ = {inp.ang_rol}°</text>
-      <text x={cx} y={y_left - cap_h * 1.4 - 6} fill={palette.copper} fontSize="9" textAnchor="middle" fontWeight="600">Φs = {inp.phi_s}°</text>
-
-      {/* Title */}
-      <text x={cx} y={20} fill={palette.text} fontSize="11" textAnchor="middle" fontWeight="700">Seção Transversal</text>
-      {res?.fa && (
-        <g transform={`translate(${W - 140}, 30)`}>
-          <text x={0} y={0} fill={palette.muted} fontSize="9">Au real:</text>
-          <text x={130} y={0} fill={palette.copper} fontSize="9" textAnchor="end" fontWeight="700">{res.fa.Au.toFixed(4)} m²</text>
-          <text x={0} y={14} fill={palette.muted} fontSize="9">Au ref CEMA:</text>
-          <text x={130} y={14} fill={palette.text} fontSize="9" textAnchor="end">{res.fa_ref.Au.toFixed(4)} m²</text>
-          <text x={0} y={28} fill={palette.muted} fontSize="9">Ku:</text>
-          <text x={130} y={28} fill={res.Ku >= 0.9 && res.Ku <= 1.1 ? palette.ok : palette.warn} fontSize="9" textAnchor="end" fontWeight="700">{res.Ku.toFixed(3)}</text>
-        </g>
-      )}
-    </svg>
-  );
+function svgFillSection(r: CalcResult, w: number, h: number): string {
+  const padLeft = 36, padRight = 24, padTop = 44, padBottom = 40;
+  const { geom, apexHeightM } = r.fillModel;
+  const phiDeg = r.surchargeAngleDeg, phi = phiDeg * Math.PI / 180;
+  const ySurf = (x: number) => apexHeightM - Math.abs(x) * Math.tan(phi);
+  const xMin = -geom.usableHalfWidth, xMax = geom.usableHalfWidth;
+  const viewTop = geom.edgeY + geom.usableHalfWidth * Math.tan(60 * Math.PI / 180);
+  const plotW = w - padLeft - padRight, plotH = h - padTop - padBottom;
+  const scale = Math.min(plotW / (xMax - xMin), plotH / Math.max(viewTop, 0.001));
+  const xOrigin = (w - (xMax - xMin) * scale) / 2, yBase = h - padBottom;
+  const sx = (x: number) => xOrigin + (x - xMin) * scale;
+  const sy = (y: number) => yBase - y * scale;
+  const beltPts = [[xMin, geom.edgeY], [-geom.centerHalf, 0], [geom.centerHalf, 0], [xMax, geom.edgeY]];
+  const surfacePts = Array.from({ length: 241 }, (_, i) => { const x = xMin + (xMax - xMin) * i / 240; return [x, Math.max(geom.beltY(x), ySurf(x))]; });
+  const matPoly = [[xMin, geom.beltY(xMin)], ...surfacePts, [xMax, geom.beltY(xMax)], [geom.centerHalf, geom.beltY(geom.centerHalf)], [-geom.centerHalf, geom.beltY(-geom.centerHalf)]];
+  const beltPath = beltPts.map((p, i) => `${i ? 'L' : 'M'} ${sx(p[0]).toFixed(1)} ${sy(p[1]).toFixed(1)}`).join(' ');
+  const matPath = matPoly.map((p, i) => `${i ? 'L' : 'M'} ${sx(p[0]).toFixed(1)} ${sy(p[1]).toFixed(1)}`).join(' ') + ' Z';
+  return `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="belt cross section fill">
+    <rect x="0" y="0" width="${w}" height="${h}" fill="transparent"/>
+    <path d="${matPath}" fill="rgba(88,138,214,0.68)" stroke="rgba(53,91,156,0.95)" stroke-width="1.5"/>
+    <path d="${beltPath}" fill="none" stroke="#8a6d2f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(0)}" y2="${sy(apexHeightM)}" stroke="rgba(0,0,0,.24)" stroke-dasharray="5 4"/>
+    <text x="${sx(0) + 8}" y="${sy(apexHeightM) - 6}" font-size="11" fill="currentColor">apex</text>
+    <text x="${padLeft}" y="${padTop - 14}" font-size="12" font-weight="800" fill="currentColor">Occupied ${fmtFixed(r.occupiedAreaM2, 4)} m² · CEMA avail ${fmtFixed(r.cemaAvailableAreaM2, 4)} m² · fill ${fmtFixed(r.fillAreaPct, 1)}%</text>
+    <text x="${padLeft}" y="${h - 24}" font-size="11" fill="currentColor">Fixed belt trough angle ${fmtFixed(r.troughAngleDeg, 0)}° · surcharge angle ${fmtFixed(r.surchargeAngleDeg, 0)}° · max ${fmtFixed(r.maxAreaM2, 4)} m²</text>
+    <text x="${padLeft}" y="${h - 8}" font-size="11" fill="currentColor">Edge distance ${fmtFixed(r.edgeDistanceM * 1000, 0)} mm each side · avail ${fmtFixed(r.fillModel.availableAreaFactor, 5)} × B² · max ${fmtFixed(r.fillModel.maxAreaFactor, 5)} × B²</text>
+  </svg>`;
 }
 
-// ============================================================
-// GRÁFICO DE TENSÃO ao longo da correia
-// ============================================================
-function TensionChart({ res, palette }: any) {
-  if (!res?.curve) return null;
-  const W = 760, H = 280, padL = 60, padR = 30, padT = 20, padB = 40;
-  const data = res.curve;
-  const maxT = Math.max(...data.map((d: any) => Math.max(d.T_carga, d.T_volta)), res.Tad) * 1.1;
-  const maxX = data[data.length - 1].pos;
-
-  const sx = (W - padL - padR) / maxX;
-  const sy = (H - padT - padB) / maxT;
-  const xT = (x: number) => padL + x * sx;
-  const yT = (t: number) => H - padB - t * sy;
-
-  const pathCarga = data.map((d: any, i: number) => `${i === 0 ? "M" : "L"} ${xT(d.pos)} ${yT(d.T_carga)}`).join(" ");
-  const pathVolta = data.map((d: any, i: number) => `${i === 0 ? "M" : "L"} ${xT(d.pos)} ${yT(d.T_volta)}`).join(" ");
-  const areaCarga = pathCarga + ` L ${xT(maxX)} ${yT(0)} L ${xT(0)} ${yT(0)} Z`;
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: palette.bg1, borderRadius: 8, border: `1px solid ${palette.border}` }}>
-      <defs>
-        <linearGradient id="ten-grad" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor={palette.primary} stopOpacity="0.4"/>
-          <stop offset="100%" stopColor={palette.primary} stopOpacity="0.05"/>
-        </linearGradient>
-      </defs>
-
-      {/* Eixos */}
-      <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke={palette.muted} strokeWidth="1"/>
-      <line x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} stroke={palette.muted} strokeWidth="1"/>
-
-      {/* Grid horizontal */}
-      {[0.25, 0.5, 0.75, 1.0].map((f, i) => (
-        <g key={i}>
-          <line x1={padL} y1={yT(maxT * f)} x2={W - padR} y2={yT(maxT * f)} stroke={palette.border} strokeWidth="0.5" strokeDasharray="3,3"/>
-          <text x={padL - 5} y={yT(maxT * f) + 3} fill={palette.muted} fontSize="9" textAnchor="end">{(maxT * f).toFixed(0)}</text>
-        </g>
-      ))}
-
-      {/* Linha Tad (limite) */}
-      <line x1={padL} y1={yT(res.Tad)} x2={W - padR} y2={yT(res.Tad)} stroke={palette.bad} strokeWidth="1.5" strokeDasharray="6,4"/>
-      <text x={W - padR - 4} y={yT(res.Tad) - 4} fill={palette.bad} fontSize="9" textAnchor="end" fontWeight="600">Tad = {res.Tad.toFixed(0)} kgf</text>
-
-      {/* Área e linha da carga */}
-      <path d={areaCarga} fill="url(#ten-grad)"/>
-      <path d={pathCarga} fill="none" stroke={palette.primary} strokeWidth="2.5"/>
-      <path d={pathVolta} fill="none" stroke={palette.copper} strokeWidth="2" strokeDasharray="5,3"/>
-
-      {/* Pontos T1, T2 */}
-      <circle cx={xT(maxX)} cy={yT(res.T1)} r={4} fill={palette.primary} stroke={palette.bg1} strokeWidth="1.5"/>
-      <text x={xT(maxX) - 8} y={yT(res.T1) - 6} fill={palette.primary} fontSize="9" textAnchor="end" fontWeight="700">T1 = {res.T1.toFixed(0)}</text>
-
-      <circle cx={xT(0)} cy={yT(res.T2)} r={4} fill={palette.copper} stroke={palette.bg1} strokeWidth="1.5"/>
-      <text x={xT(0) + 8} y={yT(res.T2) - 6} fill={palette.copper} fontSize="9" fontWeight="700">T2 = {res.T2.toFixed(0)}</text>
-
-      {/* Eixo X labels */}
-      <text x={padL} y={H - padB + 16} fill={palette.muted} fontSize="9">0m (cauda)</text>
-      <text x={W - padR} y={H - padB + 16} fill={palette.muted} fontSize="9" textAnchor="end">{maxX}m (cabeça)</text>
-      <text x={W / 2} y={H - 5} fill={palette.muted} fontSize="9" textAnchor="middle">Posição ao longo da correia</text>
-      <text x={20} y={H / 2} fill={palette.muted} fontSize="9" textAnchor="middle" transform={`rotate(-90 20 ${H / 2})`}>Tensão (kgf)</text>
-
-      {/* Title */}
-      <text x={W / 2} y={14} fill={palette.text} fontSize="11" textAnchor="middle" fontWeight="700">Perfil de Tensão da Correia</text>
-
-      {/* Legend */}
-      <g transform={`translate(${padL + 20}, ${padT + 14})`}>
-        <line x1={0} y1={0} x2={20} y2={0} stroke={palette.primary} strokeWidth="2.5"/>
-        <text x={24} y={3} fill={palette.text} fontSize="9">Lado tenso (carga)</text>
-        <line x1={130} y1={0} x2={150} y2={0} stroke={palette.copper} strokeWidth="2" strokeDasharray="5,3"/>
-        <text x={154} y={3} fill={palette.text} fontSize="9">Lado frouxo (retorno)</text>
-      </g>
-    </svg>
-  );
+function svgFillCurve(r: CalcResult, w: number, h: number): string {
+  const margin = { left: 62, right: 18, top: 18, bottom: 40 };
+  const fillMax = Math.max(120, Math.ceil(Math.max(r.fillAreaPct, 100) / 10) * 10);
+  const yMax = Math.max(r.maxAreaM2 * 1.20, r.occupiedAreaM2 * 1.15, 0.001);
+  const xScale = (pct: number) => margin.left + (pct / fillMax) * (w - margin.left - margin.right);
+  const yScale = (area: number) => h - margin.bottom - (area / yMax) * (h - margin.top - margin.bottom);
+  const pts = Array.from({ length: Math.ceil(fillMax / 2) + 1 }, (_, i) => [i * 2, r.cemaAvailableAreaM2 * (i * 2 / 100)]);
+  const path = pts.map((p, i) => `${i ? 'L' : 'M'} ${xScale(p[0]).toFixed(2)} ${yScale(p[1]).toFixed(2)}`).join(' ');
+  const reqX = xScale(Math.min(r.fillAreaPct, fillMax)), reqY = yScale(Math.min(r.occupiedAreaM2, yMax));
+  const gridLines = [0, 25, 50, 75, 100].map(p => `<g><line x1="${xScale(p)}" y1="${margin.top}" x2="${xScale(p)}" y2="${h - margin.bottom}" stroke="rgba(0,0,0,.08)"/><text x="${xScale(p)}" y="${h - margin.bottom + 16}" text-anchor="middle" font-size="11" fill="#777">${p}%</text></g>`).join('');
+  const yGridLines = [0, 0.25, 0.5, 0.75, 1].map(fr => { const a = yMax * fr; return `<g><line x1="${margin.left}" y1="${yScale(a)}" x2="${w - margin.right}" y2="${yScale(a)}" stroke="rgba(0,0,0,.08)"/><text x="${margin.left - 8}" y="${yScale(a) + 4}" text-anchor="end" font-size="11" fill="#777">${fmtFixed(a, 4)}</text></g>`; }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="fill curve">
+    ${gridLines}${yGridLines}
+    <line x1="${margin.left}" y1="${h - margin.bottom}" x2="${w - margin.right}" y2="${h - margin.bottom}" stroke="#8f816b" stroke-width="1.6"/>
+    <line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${h - margin.bottom}" stroke="#8f816b" stroke-width="1.6"/>
+    <path d="${path}" fill="none" stroke="#cfac6d" stroke-width="3"/>
+    <line x1="${xScale(100)}" y1="${margin.top}" x2="${xScale(100)}" y2="${h - margin.bottom}" stroke="#8a6d2f" stroke-dasharray="3 3" stroke-width="1.8"/>
+    <line x1="${margin.left}" y1="${yScale(r.maxAreaM2)}" x2="${w - margin.right}" y2="${yScale(r.maxAreaM2)}" stroke="#8f4454" stroke-dasharray="3 3" stroke-width="1.8"/>
+    <line x1="${reqX}" y1="${margin.top}" x2="${reqX}" y2="${h - margin.bottom}" stroke="#355b9c" stroke-dasharray="5 4" stroke-width="2"/>
+    <line x1="${margin.left}" y1="${reqY}" x2="${w - margin.right}" y2="${reqY}" stroke="#355b9c" stroke-dasharray="5 4" stroke-width="2"/>
+    <circle cx="${reqX}" cy="${reqY}" r="5.5" fill="#355b9c" stroke="#fff" stroke-width="1.4"/>
+    <text x="${xScale(100) + 4}" y="${margin.top + 14}" font-size="10" fill="#8a6d2f">CEMA available</text>
+    <text x="${w - margin.right - 4}" y="${yScale(r.maxAreaM2) - 4}" text-anchor="end" font-size="10" fill="#8f4454">Maximum area</text>
+    <text x="${w / 2}" y="${h - 8}" text-anchor="middle" font-size="12" fill="#555">Section fill relative to CEMA available (%)</text>
+    <text x="18" y="${h / 2}" transform="rotate(-90 18 ${h / 2})" text-anchor="middle" font-size="12" fill="#555">Area (m²)</text>
+  </svg>`;
 }
 
-// ============================================================
-// BARRAS — Decomposição das resistências
-// ============================================================
-function ResistanceBars({ res, palette }: any) {
-  if (!res) return null;
-  const W = 760, H = 240, padL = 80, padR = 20, padT = 20, padB = 40;
-  const items = [
-    { l: "Tx (idlers)", v: res.Tx, c: palette.primary },
-    { l: "Ty (correia)", v: res.Ty, c: palette.primaryLight },
-    { l: "Tyr (retorno)", v: res.Tyr, c: palette.primaryDark },
-    { l: "Tm (elev. mat.)", v: res.Tm, c: palette.copper },
-    { l: "Tsb (skirts)", v: res.Tsb, c: palette.warn },
-    { l: "Tbc (limpadores)", v: res.Tbc, c: palette.muted },
-    { l: "Tpl (plows)", v: res.Tpl, c: palette.copperDark },
-    { l: "Tam (acel.)", v: res.Tam, c: palette.ok },
+function svgTraction(r: CalcResult, w: number, h: number): string {
+  const maxLbf = Math.max(r.t2SlipLbf, r.t2SagLbf, r.t2Lbf, r.t1Lbf, 1);
+  const scale = (v: number) => 110 + (v / maxLbf) * (w - 180);
+  const rows = [
+    { label: 'T2 slip',       value: r.t2SlipLbf,       color: '#325d88', note: `|Te| × Cw = ${fmtFixed(r.cw, 2)}` },
+    { label: 'T2 sag',        value: r.t2SagLbf,        color: '#8a6d2f', note: `T0 + Tb − Tyr · ${fmtFixed(r.sagPercent, 1)}% sag` },
+    { label: 'T2 governing',  value: r.t2Lbf,           color: '#216b45', note: `${r.governingSource} governs` },
+    { label: 'T1 approx.',    value: r.t1Lbf,           color: '#9b2c2c', note: '|Te| + T2' },
+    { label: 'Counterweight', value: r.counterweightLbf, color: '#6f5d3e', note: 'Approx. 2 × T2 for gravity take-up' },
   ];
-  const maxV = Math.max(...items.map(i => i.v), 1);
-  const bw = (W - padL - padR) / items.length - 8;
-  const sy = (H - padT - padB) / maxV;
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: palette.bg1, borderRadius: 8, border: `1px solid ${palette.border}` }}>
-      <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke={palette.muted} strokeWidth="1"/>
-      <line x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} stroke={palette.muted} strokeWidth="1"/>
-
-      {items.map((it, i) => {
-        const x = padL + 4 + i * (bw + 8);
-        const h = it.v * sy;
-        const y = H - padB - h;
-        return (
-          <g key={i}>
-            <rect x={x} y={y} width={bw} height={h} fill={it.c} opacity="0.85" rx={2}/>
-            <text x={x + bw / 2} y={y - 4} fill={palette.text} fontSize="9" textAnchor="middle" fontWeight="600">{it.v.toFixed(0)}</text>
-            <text x={x + bw / 2} y={H - padB + 14} fill={palette.muted} fontSize="8" textAnchor="middle">{it.l.split(" ")[0]}</text>
-            <text x={x + bw / 2} y={H - padB + 24} fill={palette.muted} fontSize="7" textAnchor="middle">{it.l.split(" ").slice(1).join(" ")}</text>
-          </g>
-        );
-      })}
-
-      <text x={W / 2} y={14} fill={palette.text} fontSize="11" textAnchor="middle" fontWeight="700">Decomposição das Resistências (kgf) — Te = {res.Te.toFixed(0)}</text>
-    </svg>
-  );
+  const rowH = 52, top = 26;
+  const lines = [`<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Traction checks"><rect x="0" y="0" width="${w}" height="${h}" fill="transparent"/>`];
+  lines.push(`<text x="${w / 2}" y="18" text-anchor="middle" font-size="12" fill="#666">Head-drive interpretation of slip, sag, and take-up checks</text>`);
+  rows.forEach((row, i) => {
+    const y = top + i * rowH;
+    lines.push(`<text x="18" y="${y + 24}" font-size="12" font-weight="700" fill="currentColor">${row.label}</text>`);
+    lines.push(`<rect x="110" y="${y + 8}" width="${scale(row.value) - 110}" height="22" rx="11" fill="${row.color}" opacity="0.86"/>`);
+    lines.push(`<text x="${scale(row.value) + 8}" y="${y + 24}" font-size="11" fill="#666">${fmtFixed(lbfToKn(row.value), 2)} kN</text>`);
+    lines.push(`<text x="18" y="${y + 40}" font-size="11" fill="#777">${row.note}</text>`);
+  });
+  lines.push(`<line x1="110" y1="${top - 4}" x2="110" y2="${h - 26}" stroke="#8f816b" stroke-width="1.6"/></svg>`);
+  return lines.join('');
 }
 
-// ============================================================
-// VIEWER 3D — Three.js (CDN dinâmico) com perfil multi-trecho
-// ============================================================
-function ThreeViewer3D({ inp, res, pulleys, palette }: any) {
-  const mountRef = useRef<HTMLDivElement | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState(false);
+function svgProfile(prof: ProfileResult, w: number, h: number): string {
+  const margin = { left: 52, right: 18, top: 26, bottom: 34 };
+  const minX = 0, maxX = Math.max(prof.totalLen, 1);
+  const elevs = prof.nodes.map(n => n.elev);
+  const minY = Math.min(...elevs, 0), maxY = Math.max(...elevs, 1);
+  const padY = Math.max((maxY - minY) * 0.15, 3);
+  const sx = (x: number) => margin.left + ((x - minX) / Math.max(maxX - minX, 1e-6)) * (w - margin.left - margin.right);
+  const sy = (y: number) => h - margin.bottom - ((y - (minY - padY)) / Math.max((maxY + padY) - (minY - padY), 1e-6)) * (h - margin.top - margin.bottom);
+  const path = prof.nodes.map((n, i) => `${i ? 'L' : 'M'} ${sx(n.station).toFixed(1)} ${sy(n.elev).toFixed(1)}`).join(' ');
+  const curveSvg = prof.curves.map(c => {
+    const x1 = sx(c.startStation), x2 = sx(c.endStation), y = sy(c.elev) - 18;
+    return `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${c.status === 'OK' ? '#216b45' : '#9b6a1d'}" stroke-width="4" stroke-linecap="round" opacity="0.85"/>`;
+  }).join('');
+  const nodeSvg = prof.nodes.map((node, i) => `<g><circle class="profile-node-dot" data-node-index="${i}" cx="${sx(node.station)}" cy="${sy(node.elev)}" r="7" fill="#355b9c" stroke="#fff" stroke-width="2" style="cursor:grab"/><text x="${sx(node.station) + 10}" y="${sy(node.elev) - 10}" font-size="11" fill="currentColor">${node.id}</text></g>`).join('');
+  const markerColors: Record<string, string> = { drive: '#cfac6d', takeup: '#8f4454', tail: '#5c7d5c', return: '#6d6d9a', feed: '#325d88', custom: '#666' };
+  const markerSvg = prof.markers.map((m, i) => {
+    const x = sx(m.station), y = sy(interpolateProfileElevation(prof.nodes, m.station));
+    const color = markerColors[m.type] || '#666';
+    return `<g><path class="profile-marker-dot" data-marker-index="${i}" d="M ${x} ${y - 20} L ${x - 8} ${y - 34} L ${x + 8} ${y - 34} Z" fill="${color}" stroke="#fff" stroke-width="1.3" style="cursor:ew-resize"/><line x1="${x}" y1="${y - 20}" x2="${x}" y2="${y}" stroke="${color}" stroke-width="2"/><text x="${x + 8}" y="${y - 26}" font-size="11" fill="currentColor">${m.label}</text></g>`;
+  }).join('');
+  const gridX = [0, 0.25, 0.5, 0.75, 1].map(fr => { const x = margin.left + fr * (w - margin.left - margin.right); return `<g><line x1="${x}" y1="${margin.top}" x2="${x}" y2="${h - margin.bottom}" stroke="rgba(0,0,0,.08)"/><text x="${x}" y="${h - 10}" text-anchor="middle" font-size="11" fill="#777">${fmtFixed(minX + fr * (maxX - minX), 1)}</text></g>`; }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Conveyor profile editor">
+    ${gridX}
+    <line x1="${margin.left}" y1="${h - margin.bottom}" x2="${w - margin.right}" y2="${h - margin.bottom}" stroke="#8f816b" stroke-width="1.5"/>
+    <line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${h - margin.bottom}" stroke="#8f816b" stroke-width="1.5"/>
+    <path d="${path}" fill="none" stroke="#355b9c" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    ${curveSvg}${markerSvg}${nodeSvg}
+    <text x="${w / 2}" y="18" text-anchor="middle" font-size="12" fill="#666">Station (m)</text>
+    <text x="18" y="${h / 2}" transform="rotate(-90 18 ${h / 2})" text-anchor="middle" font-size="12" fill="#666">Elevation (m)</text>
+  </svg>`;
+}
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 7 — MAIN COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+type Action =
+  | { type: 'SET'; field: keyof State; value: unknown }
+  | { type: 'SET_ALL'; state: State }
+  | { type: 'RESET' }
+  | { type: 'LOAD_SAMPLE' };
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'SET': return { ...state, [action.field]: action.value };
+    case 'SET_ALL': return action.state;
+    case 'RESET': return { ...DEFAULTS, theme: state.theme };
+    case 'LOAD_SAMPLE': return { ...SAMPLE, theme: state.theme };
+    default: return state;
+  }
+}
+
+// SVG panel with resize observer
+function SvgPanel({ render, height }: { render: (w: number, h: number) => string; height: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ w: 640, h: height });
   useEffect(() => {
-    if (!mountRef.current) return;
-    let cleanup: (() => void) | null = null;
-    let cancelled = false;
-
-    const load = async () => {
-      try {
-        const w: any = window;
-        if (!w.THREE) {
-          await new Promise<void>((resolve, reject) => {
-            const s = document.createElement("script");
-            s.src = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js";
-            s.onload = () => resolve();
-            s.onerror = () => reject();
-            document.head.appendChild(s);
-          });
-          await new Promise<void>((resolve, reject) => {
-            const s = document.createElement("script");
-            s.src = "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js";
-            s.onload = () => resolve();
-            s.onerror = () => reject();
-            document.head.appendChild(s);
-          });
-        }
-        if (cancelled) return;
-        const THREE = w.THREE;
-        const mount = mountRef.current!;
-        const W = mount.clientWidth;
-        const H = 480;
-
-        const scene = new THREE.Scene();
-        scene.background = new THREE.Color(palette.bg1);
-        scene.fog = new THREE.Fog(palette.bg1, 40, 200);
-
-        const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 1000);
-        camera.position.set(25, 18, 35);
-
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(W, H);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        mount.innerHTML = "";
-        mount.appendChild(renderer.domElement);
-
-        const controls = new THREE.OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.dampingFactor = 0.08;
-        controls.target.set(0, 2, 0);
-
-        // Luzes
-        scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-        const dl = new THREE.DirectionalLight(0xffffff, 0.85);
-        dl.position.set(20, 30, 15);
-        scene.add(dl);
-        const dl2 = new THREE.DirectionalLight(0x88aaff, 0.25);
-        dl2.position.set(-15, 10, -20);
-        scene.add(dl2);
-
-        // Grid
-        const grid = new THREE.GridHelper(60, 30, palette.border, palette.border);
-        (grid.material as any).opacity = 0.4;
-        (grid.material as any).transparent = true;
-        scene.add(grid);
-
-        // Cores
-        const beltColor = new THREE.Color(palette.primary);
-        const matColor = new THREE.Color(palette.copper);
-        const drumColor = new THREE.Color(palette.copperDark);
-        const idlerColor = new THREE.Color(palette.muted);
-        const driveColor = new THREE.Color(palette.copper);
-
-        // Calcula pontos do perfil 3D
-        const segs = inp.segments;
-        let cx = 0, cy = 0;
-        const profile: { x: number; y: number }[] = [{ x: 0, y: 0 }];
-        for (const seg of segs) {
-          cx += seg.comp * Math.cos(seg.ang * Math.PI / 180);
-          cy += seg.comp * Math.sin(seg.ang * Math.PI / 180);
-          profile.push({ x: cx, y: cy });
-        }
-        const Lh = profile[profile.length - 1].x;
-        const scale = 30 / (Lh || 1);
-        const proj = profile.map(p => ({ x: p.x * scale - 15, y: p.y * scale + 1 }));
-
-        const Bw = inp.larg_pol * 25.4 / 1000; // m
-        const beltWidth3D = Math.max(Bw * 1.5, 1.2);
-
-        // Constrói correia como tubos cilíndricos por trecho
-        for (let i = 0; i < proj.length - 1; i++) {
-          const a = proj[i], b = proj[i + 1];
-          const dx = b.x - a.x, dy = b.y - a.y;
-          const len = Math.sqrt(dx * dx + dy * dy);
-          const ang = Math.atan2(dy, dx);
-          const cxm = (a.x + b.x) / 2, cym = (a.y + b.y) / 2;
-
-          // Lado de carga
-          const loadGeo = new THREE.BoxGeometry(len, 0.12, beltWidth3D);
-          const loadMat = new THREE.MeshStandardMaterial({ color: beltColor, metalness: 0.3, roughness: 0.6 });
-          const loadMesh = new THREE.Mesh(loadGeo, loadMat);
-          loadMesh.position.set(cxm, cym + 0.5, 0);
-          loadMesh.rotation.z = ang;
-          scene.add(loadMesh);
-
-          // Material em cima
-          const matGeo = new THREE.BoxGeometry(len * 0.95, 0.35, beltWidth3D * 0.7);
-          const matMat = new THREE.MeshStandardMaterial({ color: matColor, metalness: 0.1, roughness: 0.85 });
-          const matMesh = new THREE.Mesh(matGeo, matMat);
-          matMesh.position.set(cxm, cym + 0.78, 0);
-          matMesh.rotation.z = ang;
-          scene.add(matMesh);
-
-          // Lado de retorno (paralelo abaixo)
-          const retMesh = new THREE.Mesh(loadGeo.clone(), new THREE.MeshStandardMaterial({ color: beltColor, metalness: 0.3, roughness: 0.6, opacity: 0.7, transparent: true }));
-          retMesh.position.set(cxm, cym - 0.5, 0);
-          retMesh.rotation.z = ang;
-          scene.add(retMesh);
-
-          // Roletes ao longo do trecho
-          const idlerSpacing = inp.esp_rol * scale;
-          const nIdlers = Math.max(2, Math.floor(len / idlerSpacing));
-          for (let k = 0; k <= nIdlers; k++) {
-            const f = k / nIdlers;
-            const ix = a.x + (b.x - a.x) * f;
-            const iy = a.y + (b.y - a.y) * f;
-            // Rolete central
-            const rollGeo = new THREE.CylinderGeometry(0.13, 0.13, beltWidth3D * 0.55, 12);
-            const rollMat = new THREE.MeshStandardMaterial({ color: idlerColor, metalness: 0.7, roughness: 0.3 });
-            const roll = new THREE.Mesh(rollGeo, rollMat);
-            roll.position.set(ix, iy + 0.42, 0);
-            roll.rotation.x = Math.PI / 2;
-            scene.add(roll);
-            // Roletes laterais
-            [-1, 1].forEach(side => {
-              const lat = new THREE.Mesh(rollGeo.clone(), rollMat);
-              lat.position.set(ix, iy + 0.52, side * beltWidth3D * 0.4);
-              lat.rotation.x = Math.PI / 2;
-              lat.rotation.z = side * (inp.ang_rol * Math.PI / 180);
-              scene.add(lat);
-            });
-          }
-        }
-
-        // Tambores nas posições editadas
-        pulleys.forEach((p: any) => {
-          const sx = p.x * scale - 15;
-          // Encontra y interpolando
-          let py = 0;
-          for (let i = 0; i < profile.length - 1; i++) {
-            if (p.x >= profile[i].x && p.x <= profile[i + 1].x) {
-              const f = (p.x - profile[i].x) / (profile[i + 1].x - profile[i].x || 1);
-              py = (proj[i].y + f * (proj[i + 1].y - proj[i].y));
-              break;
-            }
-          }
-          if (p.x >= profile[profile.length - 1].x) py = proj[proj.length - 1].y;
-
-          const r = p.type === "drive" ? 0.9 : p.type === "tail" ? 0.75 : 0.55;
-          const color = p.type === "drive" ? driveColor : drumColor;
-          const drumGeo = new THREE.CylinderGeometry(r, r, beltWidth3D * 1.1, 32);
-          const drumMat = new THREE.MeshStandardMaterial({ color, metalness: 0.85, roughness: 0.25 });
-          const drum = new THREE.Mesh(drumGeo, drumMat);
-          drum.position.set(sx, py + (p.side === "top" ? 0 : -1), 0);
-          drum.rotation.x = Math.PI / 2;
-          scene.add(drum);
-
-          // Eixo
-          const axisGeo = new THREE.CylinderGeometry(0.08, 0.08, beltWidth3D * 1.6, 12);
-          const axis = new THREE.Mesh(axisGeo, new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.9, roughness: 0.2 }));
-          axis.position.copy(drum.position);
-          axis.rotation.x = Math.PI / 2;
-          scene.add(axis);
-        });
-
-        // Solo
-        const groundGeo = new THREE.PlaneGeometry(80, 30);
-        const groundMat = new THREE.MeshStandardMaterial({ color: palette.bg2, roughness: 0.95, metalness: 0 });
-        const ground = new THREE.Mesh(groundGeo, groundMat);
-        ground.rotation.x = -Math.PI / 2;
-        ground.position.y = -0.5;
-        scene.add(ground);
-
-        // Animation
-        let raf = 0;
-        const animate = () => {
-          raf = requestAnimationFrame(animate);
-          controls.update();
-          renderer.render(scene, camera);
-        };
-        animate();
-        setLoaded(true);
-
-        const onResize = () => {
-          if (!mount) return;
-          const w = mount.clientWidth;
-          renderer.setSize(w, H);
-          camera.aspect = w / H;
-          camera.updateProjectionMatrix();
-        };
-        window.addEventListener("resize", onResize);
-
-        cleanup = () => {
-          cancelAnimationFrame(raf);
-          window.removeEventListener("resize", onResize);
-          renderer.dispose();
-          mount.innerHTML = "";
-        };
-      } catch (e) {
-        setError(true);
+    if (!ref.current) return;
+    const obs = new ResizeObserver(entries => {
+      for (const e of entries) {
+        const w = Math.floor(e.contentRect.width);
+        if (w > 0) setSize({ w, h: height });
       }
-    };
-    load();
-    return () => { cancelled = true; if (cleanup) cleanup(); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(inp.segments), JSON.stringify(pulleys), inp.larg_pol, inp.ang_rol, inp.esp_rol, palette.bg1]);
-
-  if (error) return <div style={{ padding: 20, color: palette.bad, textAlign: "center" }}>Erro ao carregar Three.js. Verifique a conexão.</div>;
+    });
+    obs.observe(ref.current);
+    return () => obs.disconnect();
+  }, [height]);
+  const svg = useMemo(() => render(size.w, size.h), [render, size]);
   return (
-    <div style={{ position: "relative" }}>
-      <div ref={mountRef} style={{ width: "100%", height: 480, borderRadius: 8, overflow: "hidden", border: `1px solid ${palette.border}` }}/>
-      {!loaded && <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: palette.muted, fontSize: 11 }}>Carregando 3D…</div>}
-    </div>
+    <div ref={ref} style={{ height, overflow: 'hidden', background: 'var(--bg)', padding: '12px' }}
+      dangerouslySetInnerHTML={{ __html: svg }} />
   );
 }
 
-// ============================================================
-// SEÇÃO TRANSVERSAL SIMPLIFICADA — Para aba Material
-// ============================================================
-function AreaSection({ inp, res, palette }: any) {
-  if (!res) return null;
-  const fa = res.fa;
-  const W = 320, H = 160, padX = 30, padY = 20;
-  const B_mm = inp.larg_pol * 25.4;
-  const scale = (W - 2 * padX) / B_mm;
-  const bw = B_mm * scale;
-  const lambda = inp.ang_rol * Math.PI / 180;
-  const b_util_px = fa.b_util * 1000 * scale;
-  const ll = b_util_px / 3;
-  const centerX = W / 2;
-  const beltY = H - padY;
-  const leftX = centerX - bw / 2;
-  const rightX = centerX + bw / 2;
-  const outerLeft = centerX - b_util_px / 2;
-  const outerRight = centerX + b_util_px / 2;
-  const innerLeft2 = centerX - ll / 2;
-  const innerRight2 = centerX + ll / 2;
-  const sideH = ((b_util_px / 2) - (ll / 2)) * Math.sin(lambda);
-  const topY = beltY - sideH;
-  const h_cap_px = fa.h_cap * 1000 * scale;
-  const surchargeTopY = topY - h_cap_px;
-  const bsW = fa.b_util * 1000 * scale * (1 + 2 * ((b_util_px / 2 - ll / 2) / b_util_px) * Math.cos(lambda));
+// Draggable profile SVG
+function ProfileSvgPanel({ r, dispatch }: { r: CalcResult; dispatch: React.Dispatch<Action> }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ w: 860, h: 420 });
+  const dragState = useRef<{ kind: 'node' | 'marker'; index: number } | null>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    const obs = new ResizeObserver(entries => {
+      for (const e of entries) { const w = Math.floor(e.contentRect.width); if (w > 0) setSize({ w, h: 420 }); }
+    });
+    obs.observe(ref.current);
+    return () => obs.disconnect();
+  }, []);
+
+  const svg = useMemo(() => svgProfile(r.profile, size.w, size.h), [r.profile, size]);
+  const margin = { left: 52, right: 18, top: 26, bottom: 34 };
+
+  const updateProfileJson = useCallback((mutator: (prof: { nodes: ProfileNode[]; markers: ProfileMarker[] }) => void) => {
+    const prof = sanitizeProfile(r.profileNodesJson, r.profileMarkersJson, r.centerLengthM, r.liftM);
+    mutator(prof);
+    dispatch({ type: 'SET', field: 'profileNodesJson', value: JSON.stringify(prof.nodes) });
+    dispatch({ type: 'SET', field: 'profileMarkersJson', value: JSON.stringify(prof.markers) });
+  }, [r, dispatch]);
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const t = e.target as Element;
+    const node = t.closest('[data-node-index]');
+    const marker = t.closest('[data-marker-index]');
+    if (node) { dragState.current = { kind: 'node', index: parseInt((node as HTMLElement).dataset.nodeIndex || '0', 10) }; (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); }
+    else if (marker) { dragState.current = { kind: 'marker', index: parseInt((marker as HTMLElement).dataset.markerIndex || '0', 10) }; (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); }
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragState.current || !ref.current) return;
+    const rect = ref.current.getBoundingClientRect();
+    const prof = r.profile;
+    const maxX = Math.max(prof.totalLen, 1);
+    const elevs = prof.nodes.map(n => n.elev);
+    const minY = Math.min(...elevs, 0), maxY = Math.max(...elevs, 1);
+    const padY = Math.max((maxY - minY) * 0.15, 3);
+    const station = clamp(((e.clientX - rect.left - margin.left) / Math.max(size.w - margin.left - margin.right, 1)) * maxX, 0, maxX);
+    const elev = (maxY + padY) - ((e.clientY - rect.top - margin.top) / Math.max(size.h - margin.top - margin.bottom, 1)) * ((maxY + padY) - (minY - padY));
+    updateProfileJson((ps: { nodes: ProfileNode[]; markers: ProfileMarker[] }) => {
+      if (dragState.current!.kind === 'node') {
+        const idx = dragState.current!.index;
+        if (idx > 0 && idx < ps.nodes.length - 1) {
+          const prev = ps.nodes[idx - 1].station + 1, next = ps.nodes[idx + 1].station - 1;
+          ps.nodes[idx].station = clamp(station, prev, next);
+        }
+        ps.nodes[idx].elev = elev;
+      } else {
+        ps.markers[dragState.current!.index].station = station;
+      }
+    });
+  };
+
+  const handlePointerUp = () => { dragState.current = null; };
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: palette.bg0, borderRadius: 6, border: `1px solid ${palette.border}` }}>
-      {/* Belt flat */}
-      <line x1={leftX} y1={beltY} x2={rightX} y2={beltY} stroke={palette.copper} strokeWidth="3"/>
-      {/* Idler support triangle */}
-      <polygon points={`${centerX},${beltY+18} ${centerX-12},${beltY+30} ${centerX+12},${beltY+30}`} fill={palette.border}/>
-      <line x1={outerLeft} y1={beltY+2} x2={outerLeft-8} y2={beltY+22} stroke={palette.border} strokeWidth="2"/>
-      <line x1={outerRight} y1={beltY+2} x2={outerRight+8} y2={beltY+22} stroke={palette.border} strokeWidth="2"/>
-      {/* Trough fill */}
-      <polygon points={`${outerLeft},${beltY} ${innerLeft2},${topY} ${innerRight2},${topY} ${outerRight},${beltY}`} fill={`${palette.primary}22`} stroke={`${palette.primary}88`} strokeWidth="1.5"/>
-      {/* Surcharge cap */}
-      <polygon points={`${innerLeft2},${topY} ${centerX},${surchargeTopY} ${innerRight2},${topY}`} fill={`${palette.primary}44`} stroke={`${palette.primary}`} strokeWidth="1.5"/>
-      {/* Labels */}
-      <text x={centerX} y={H - 4} fill={palette.muted} fontSize="8" textAnchor="middle">B = {B_mm.toFixed(0)} mm</text>
-      <text x={centerX} y={topY - 4} fill={palette.muted} fontSize="8" textAnchor="middle">Au = {(fa.Au * 10000).toFixed(1)} cm²</text>
-      <text x={leftX - 2} y={beltY - sideH/2} fill={palette.copper} fontSize="7" textAnchor="end">λ={inp.ang_rol}°</text>
-      <text x={centerX} y={surchargeTopY - 4} fill={palette.primary} fontSize="7" textAnchor="middle">φs={inp.phi_s}°</text>
-    </svg>
+    <div ref={ref} style={{ height: 420, overflow: 'hidden', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 12, cursor: 'default', userSelect: 'none' }}
+      onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
+      dangerouslySetInnerHTML={{ __html: svg }} />
   );
 }
 
-// ============================================================
-// CAMPO DE ENTRADA (módulo-level para evitar remonte a cada render)
-// ============================================================
-function FField({ label, val, set, unit, step = 1, type = "number", p }: any) {
-  const lbl = { color: p.muted, fontSize: 10, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: 0.4 };
-  const iSty: any = { background: p.bg0, color: p.text, border: `1px solid ${p.border}`, borderRadius: 5, padding: "6px 8px", fontSize: 12, fontFamily: "inherit", width: "100%", outline: "none", fontVariantNumeric: "tabular-nums" };
-  return (
-    <div>
-      <div style={lbl}>{label}{unit && <span style={{ color: p.copper, marginLeft: 4 }}>({unit})</span>}</div>
-      <input type={type} value={val} step={step} onChange={(e: any) => set(type === "number" ? +e.target.value : e.target.value)} style={iSty}/>
-    </div>
-  );
-}
-function SelField({ label, val, set, opts, p }: any) {
-  const lbl = { color: p.muted, fontSize: 10, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: 0.4 };
-  const iSty: any = { background: p.bg0, color: p.text, border: `1px solid ${p.border}`, borderRadius: 5, padding: "6px 8px", fontSize: 12, fontFamily: "inherit", width: "100%", outline: "none", fontVariantNumeric: "tabular-nums" };
-  return (
-    <div>
-      <div style={lbl}>{label}</div>
-      <select value={val} onChange={(e: any) => set(e.target.value)} style={iSty}>
-        {opts.map((o: any) => <option key={o.v} value={o.v}>{o.l}</option>)}
-      </select>
-    </div>
-  );
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 8 — MAIN EXPORT
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ============================================================
-// COMPONENTE PRINCIPAL
-// ============================================================
-export default function TransportadorMod({ onSave, user, UI }: any) {
-  const SavedCalcs = UI?.SavedCalcs;
-
-  const [inp, setI] = useState({
-    // Material
-    mat_key: "iron_ore_fines",
-    mat_d: 2500, cap_th: 3240, phi_s: 20, phi_max_mat: 18,
-    // Geometria — multi-trecho
-    segments: [
-      { comp: 19.6, ang: 0 },
-    ],
-    // Correia
-    larg_pol: 72, ang_rol: 35, vel_ms: 2.5, Wb: 59.56, n_lonas: 4, cap_tens: 86298.5,
-    // Roletes
-    esp_rol: 1.0, esp_rol_ret: 3.0, idler_cl: "D", p_rol_carga: 40.01, p_rol_ret: 26.8, d_idler_mm: 127,
-    // Tambor motor
-    d_tamb_mm: 630, ang_abr: 220, mu_lag: 0.35,
-    // Acessórios
-    n_limp: 2, comp_guias: 16, Cs: 0.0754, n_plows: 0, F_plow: 0,
-    // Acionamento
-    freq_hz: 60, n_polos: 4, n_ac: 2, ef_c: 0.94, ef_r: 0.94, ef_a: 0.96,
-    // Tensionamento
-    tens_type: "gravity",
-    // Dinâmico
-    Kst: 1.5, t_start: 8, t_brake: 10, a_brake: 0.3,
-    // Chute entupido
-    chute_plug: false, chute_area_m2: 1.2, mat_shear_kpa: 35,
+export function ConveyorCalculator() {
+  const [state, dispatch] = useReducer(reducer, DEFAULTS, (d: State) => {
+    if (typeof window === 'undefined') return d;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) return { ...d, ...JSON.parse(raw) };
+    } catch {}
+    return d;
   });
 
-  const [pulleys, setPulleys] = useState<any[]>([
-    { name: "Tambor de cabeça (motor)", label: "M", type: "drive", x: 19.6, side: "top" },
-    { name: "Tambor de cauda", label: "C", type: "tail", x: 0, side: "top" },
-    { name: "Tambor de tensionamento", label: "T", type: "takeup", x: 2, side: "bot" },
-    { name: "Tambor de desvio (snub)", label: "S", type: "snub", x: 18, side: "bot" },
-  ]);
+  const r: CalcResult = useMemo(() => compute(state), [state]);
 
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
-  const [res, setR] = useState<any>(null);
-  const [tab, setTab] = useState(0);
-
-  const s = (k: string, v: any) => setI(p => ({ ...p, [k]: v }));
-
-  // Quando inp muda: limita posição do tambor motor e recalcula
+  // Sync theme to <html data-theme>
   useEffect(() => {
-    const Ltot = inp.segments.reduce((a: number, sg: any) => a + sg.comp, 0);
-    let latestPulleys = pulleys;
-    setPulleys(prev => {
-      const next = prev.map(p => p.type === "drive" ? { ...p, x: Math.min(p.x, Ltot) } : p);
-      const changed = prev.some((p: any, i: number) => next[i].x !== p.x);
-      latestPulleys = changed ? next : prev;
-      return latestPulleys; // retorna mesma referência se nada mudou → evita loop
-    });
-    // Recalcula com os pulleys atualizados (sincrono com o cálculo acima)
-    setR(calc(inp, latestPulleys));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inp]);
+    document.documentElement.setAttribute('data-theme', state.theme);
+  }, [state.theme]);
 
-  // Quando tambores são arrastados: recalcula (só pulleys mudou, inp não)
+  // Sync Cw preset
   useEffect(() => {
-    setR(calc(inp, pulleys));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pulleys]);
-
-  // Quando muda o material da DB, atualiza densidade etc
-  useEffect(() => {
-    if (inp.mat_key && inp.mat_key !== "custom") {
-      const m = MATERIAL_DB[inp.mat_key];
-      if (m) setI(p => ({ ...p, mat_d: m.rho, phi_s: m.phi_s, phi_max_mat: m.phi_max }));
+    const preset = CW_PRESETS.find(p => p.id === state.cwPreset);
+    if (preset && preset.value != null) {
+      dispatch({ type: 'SET', field: 'cw', value: preset.value });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inp.mat_key]);
+  }, [state.cwPreset]);
 
-  // PALETA
-  const palette = useMemo(() => theme === "dark" ? {
-    bg0: "#0e1511", bg1: "#16201b", bg2: "#1d2922",
-    border: "#2f3d34", text: "#e8efe9", muted: "#9ab3a3",
-    primary: "#2d8c70", primaryDark: "#1f6651", primaryLight: "#4ab18e",
-    copper: "#c97b3a", copperDark: "#8a4f1e",
-    ok: "#5fb37a", warn: "#d4a13c", bad: "#d9656a",
-    soft: "#243029",
-  } : {
-    bg0: "#f4f6f1", bg1: "#fbfcf9", bg2: "#f0f3ec",
-    border: "#d6dfd4", text: "#1a2620", muted: "#5e6e63",
-    primary: "#1f6651", primaryDark: "#134438", primaryLight: "#2d8c70",
-    copper: "#a0501e", copperDark: "#6e3711",
-    ok: "#2d7a48", warn: "#9b6a1d", bad: "#9b2c2c",
-    soft: "#e6ede4",
-  }, [theme]);
-
-  const warnings = useMemo(() => res ? generateWarnings(inp, res) : [], [inp, res]);
-
-  const handleLoad = (d: any) => { if (d.inp) setI(d.inp); if (d.res) setR(d.res); if (d.pulleys) setPulleys(d.pulleys); };
-
-  // Helpers de UI
-  const lbl = { color: palette.muted, fontSize: 10, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: 0.4 };
-  const inputSty: any = {
-    background: palette.bg0, color: palette.text, border: `1px solid ${palette.border}`,
-    borderRadius: 5, padding: "6px 8px", fontSize: 12, fontFamily: "inherit",
-    width: "100%", outline: "none", fontVariantNumeric: "tabular-nums",
+  const set = (field: keyof State) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const el = e.target;
+    const value = el.type === 'checkbox' ? (el as HTMLInputElement).checked
+      : el.type === 'number' ? parseFloat(el.value) || 0
+      : el.value;
+    dispatch({ type: 'SET', field, value });
   };
-  const card: any = {
-    background: palette.bg1, border: `1px solid ${palette.border}`,
-    borderRadius: 8, padding: 16, marginBottom: 14,
+
+  const save = () => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
   };
-  const cardTitle: any = {
-    color: palette.copper, fontSize: 11, fontWeight: 700, textTransform: "uppercase" as const,
-    letterSpacing: 0.6, marginBottom: 12, paddingBottom: 8, borderBottom: `1px solid ${palette.border}`,
+
+  // Validation badge
+  const statusLevel = !Number.isFinite(r.teLbf) ? 'bad' : r.dutyMode === 'Regenerative' ? 'warn' : 'ok';
+
+  // Validation results
+  const validationResults = useMemo<ValRow[]>(() => VALIDATION_CASES.map(item => {
+    const calc = compute(item.input as State);
+    const deviations = {
+      te: deviationPct(calc.teLbf, item.expected.teLbf),
+      hp: deviationPct(calc.beltHp, item.expected.beltHp),
+      t2: deviationPct(calc.t2Lbf, item.expected.t2Lbf),
+      t1: deviationPct(calc.t1Lbf, item.expected.t1Lbf),
+    };
+    const maxAbs = Math.max(...Object.values(deviations).map(v => Math.abs(v)));
+    return { item, calc, deviations, maxAbs };
+  }), []);
+
+  const areaValidationResults = useMemo<AreaValRow[]>(() => AREA_VALIDATION_CASES.map(item => {
+    const calculated = item.calculated();
+    const delta = deviationPct(calculated, item.expected);
+    return { ...item, calculated, delta, pass: Math.abs(delta) <= item.tolerancePct };
+  }), []);
+
+  const profileUpdateFns = {
+    addNode: () => {
+      const prof = sanitizeProfile(state.profileNodesJson, state.profileMarkersJson, state.centerLengthM, state.liftM);
+      const nodes = prof.nodes, a = nodes[nodes.length - 2], b = nodes[nodes.length - 1];
+      nodes.splice(nodes.length - 1, 0, { id: `N${nodes.length - 1}`, station: +((a.station + b.station) / 2).toFixed(2), elev: +((a.elev + b.elev) / 2).toFixed(2), curveLengthM: +((b.station - a.station) * 0.2).toFixed(2) });
+      dispatch({ type: 'SET', field: 'profileNodesJson', value: JSON.stringify(nodes) });
+    },
+    addMarker: () => {
+      const prof = sanitizeProfile(state.profileNodesJson, state.profileMarkersJson, state.centerLengthM, state.liftM);
+      const L = prof.nodes[prof.nodes.length - 1].station;
+      prof.markers.push({ id: `M${prof.markers.length + 1}`, label: `Marker ${prof.markers.length + 1}`, type: 'custom', station: +(L / 2).toFixed(2) });
+      dispatch({ type: 'SET', field: 'profileMarkersJson', value: JSON.stringify(prof.markers) });
+    },
+    syncFromLengthLift: () => {
+      const L = Math.max(state.centerLengthM || 1, 1);
+      const defaultNodes = [{ id: 'N0', station: 0, elev: 0, curveLengthM: 0 }, { id: 'N1', station: L, elev: state.liftM || 0, curveLengthM: 0 }];
+      const defaultMarkers = [{ id: 'M1', label: 'Tail', type: 'tail', station: 0 }, { id: 'M2', label: 'Drive', type: 'drive', station: L }];
+      dispatch({ type: 'SET', field: 'profileNodesJson', value: JSON.stringify(defaultNodes) });
+      dispatch({ type: 'SET', field: 'profileMarkersJson', value: JSON.stringify(defaultMarkers) });
+    },
   };
-  const grid = (n: number) => ({ display: "grid", gridTemplateColumns: `repeat(${n}, 1fr)`, gap: 12 });
 
+  // Warnings list
+  const warnings = useMemo<Array<{level: string; text: string}>>(() => {
+    const items: Array<{ level: string; text: string }> = [];
+    if (!r.overrideKx) items.push({ level: 'ok', text: `Kx is being calculated automatically from Ai = ${fmtFixed(r.aiAdjusted, 2)}, carrying load, belt weight, and idler spacing.` });
+    else items.push({ level: 'warn', text: 'Kx is in manual override mode. Verify the custom value against the actual idler design and installation condition.' });
+    if (r.useEstimatedBeltWeight) items.push({ level: 'warn', text: `Belt weight is estimated from the CEMA average table using the nearest standard width (${fmtFixed(r.estimate.standardWidthIn, 0)} in) and density band ${r.estimate.densityBand}. Replace with supplier data for final design.` });
+    if (r.cwPreset === 'manual') items.push({ level: 'warn', text: 'Cw is in manual mode. Confirm the wrap factor against the selected pulley lagging, take-up arrangement, and belt wrap angle.' });
+    if (r.dutyMode === 'Regenerative') items.push({ level: 'bad', text: `Net belt power is negative (${fmtFixed(r.beltKw, 1)} kW). Review braking, controlled regeneration, and holdback requirements before freezing the drive concept.` });
+    else items.push({ level: 'ok', text: `Motoring duty is positive. Net belt power is ${fmtFixed(r.beltKw, 1)} kW before drive efficiency and service factor.` });
+    if (r.governingSource === 'Sag') items.push({ level: 'warn', text: 'The governing T2 comes from the sag requirement rather than pulley traction. Tension control in the carrying strand is the controlling check for this case.' });
+    else items.push({ level: 'ok', text: 'The governing T2 comes from traction / no-slip requirements.' });
+    if (r.tsbLbf > 0.2 * Math.abs(r.teLbf)) items.push({ level: 'warn', text: 'Skirtboard friction is a large share of the net effective tension. Check loading-zone length, depth, edging pressure, and the selected Cs factor.' });
+    if (r.cleanerBlades > 2) items.push({ level: 'warn', text: 'Multiple cleaner blades are applied. Review actual vendor drag if cleaner design data is available.' });
+    if (r.pluggedChuteMode !== 'off') items.push({ level: r.pluggedApplyInFlow ? 'warn' : 'info', text: `Plugged-chute resistance is ${fmtFixed(r.pluggedFlowKN, 2)} kN during flow and ${fmtFixed(r.pluggedStartupKN, 2)} kN at startup using ${r.pluggedMethodBasis}.` });
+    if (r.overrideTp) items.push({ level: 'warn', text: `Tp is in manual override mode at ${fmtFixed(r.tpLbf, 1)} lbf. This is appropriate for benchmark matching or vendor-supplied pulley-resistance data.` });
+    if (r.driveEfficiencyPct <= 85) items.push({ level: 'warn', text: 'Drive efficiency is set relatively low. Confirm the gearbox / coupling / fluid coupling stack-up assumed in the shaft-power output.' });
+    if (r.kt < 1) items.push({ level: 'warn', text: 'Kt is below 1.00. This is unusual for the standard temperature correction treatment and should be verified.' });
+    return items;
+  }, [r]);
 
-  const tabs = [
-    { l: "Material", i: 0 },
-    { l: "Geometria", i: 1 },
-    { l: "Correia / Roletes", i: 2 },
-    { l: "Tambores", i: 3 },
-    { l: "Tensionamento", i: 4 },
-    { l: "Acionamento", i: 5 },
-    { l: "Dinâmica / Chute", i: 11 },
-    { l: "Resultados", i: 6 },
-    { l: "2D Interativo", i: 7 },
-    { l: "3D", i: 8 },
-    { l: "Equações", i: 9 },
-    { l: "Avisos", i: 10 },
-    { l: "Seleção Correia", i: 12 },
-    { l: "Vida Roletes", i: 13 },
-  ];
+  // Component table (extended)
+  const componentTableRows = useMemo<CompRow[]>(() => [
+    ...r.components,
+    { label: 'Tac · Total accessories', lbf: r.tacLbf, kw: componentKwFromLbf(r.tacLbf, r.vFpm), basis: 'Tbc + Tpl + Tsb + other' },
+    { label: 'Tplug(flow)', lbf: r.pluggedFlowLbf, kw: componentKwFromLbf(r.pluggedFlowLbf, r.vFpm), basis: `${r.pluggedApplyInFlow ? 'Included in steady-state Te' : 'Check only'} · ${r.pluggedMethodBasis}` },
+    { label: 'Tplug(start)', lbf: r.pluggedStartupLbf, kw: componentKwFromLbf(r.pluggedStartupLbf, r.vFpm), basis: `Startup breakout resistance (${fmtFixed(r.pluggedStartupKN, 2)} kN)` },
+    { label: 'Te base', lbf: r.teBaseLbf, kw: componentKwFromLbf(r.teBaseLbf, r.vFpm), basis: 'Historical-method total without plugged chute' },
+    { label: 'Te · Effective tension', lbf: r.teLbf, kw: r.beltKw, basis: 'Steady-state total including optional plugged-chute flow resistance' },
+    { label: 'Te startup', lbf: r.startupTeLbf, kw: r.startupBeltKw, basis: 'Base Te + plugged-chute startup breakout force' },
+    { label: 'T0 · Minimum sag tension', lbf: r.t0Lbf, kw: componentKwFromLbf(r.t0Lbf, r.vFpm), basis: `${fmtFixed(r.sagPercent, 1)}% sag criterion` },
+    { label: 'T2 slip', lbf: r.t2SlipLbf, kw: componentKwFromLbf(r.t2SlipLbf, r.vFpm), basis: '|Te| × Cw' },
+    { label: 'T2 sag', lbf: r.t2SagLbf, kw: componentKwFromLbf(r.t2SagLbf, r.vFpm), basis: 'T0 + Tb − Tyr' },
+    { label: 'T2 governing', lbf: r.t2Lbf, kw: componentKwFromLbf(r.t2Lbf, r.vFpm), basis: `${r.governingSource} governs` },
+    { label: 'T1 approx.', lbf: r.t1Lbf, kw: componentKwFromLbf(r.t1Lbf, r.vFpm), basis: '|Te| + T2' },
+  ], [r]);
 
-  // ============== RENDER ==============
+  // Profile node/marker table handlers
+  const updateNodeField = (nodeIndex: number, field: string, value: string) => {
+    const prof = sanitizeProfile(state.profileNodesJson, state.profileMarkersJson, state.centerLengthM, state.liftM);
+    if (field === 'station' || field === 'elev' || field === 'curveLengthM') (prof.nodes[nodeIndex] as unknown as Record<string, unknown>)[field] = parseFloat(value) || 0;
+    else (prof.nodes[nodeIndex] as unknown as Record<string, unknown>)[field] = value;
+    dispatch({ type: 'SET', field: 'profileNodesJson', value: JSON.stringify(prof.nodes) });
+  };
+  const removeNode = (i: number) => {
+    const prof = sanitizeProfile(state.profileNodesJson, state.profileMarkersJson, state.centerLengthM, state.liftM);
+    prof.nodes.splice(i, 1);
+    dispatch({ type: 'SET', field: 'profileNodesJson', value: JSON.stringify(prof.nodes) });
+  };
+  const updateMarkerField = (markerIndex: number, field: string, value: string) => {
+    const prof = sanitizeProfile(state.profileNodesJson, state.profileMarkersJson, state.centerLengthM, state.liftM);
+    if (field === 'station') (prof.markers[markerIndex] as unknown as Record<string, unknown>)[field] = parseFloat(value) || 0;
+    else (prof.markers[markerIndex] as unknown as Record<string, unknown>)[field] = value;
+    dispatch({ type: 'SET', field: 'profileMarkersJson', value: JSON.stringify(prof.markers) });
+  };
+  const removeMarker = (i: number) => {
+    const prof = sanitizeProfile(state.profileNodesJson, state.profileMarkersJson, state.centerLengthM, state.liftM);
+    prof.markers.splice(i, 1);
+    dispatch({ type: 'SET', field: 'profileMarkersJson', value: JSON.stringify(prof.markers) });
+  };
+
+  const schematicRender = useCallback((w: number, h: number) => svgSchematic(r, w, h), [r]);
+  const breakdownRender = useCallback((w: number, h: number) => svgBreakdownChart(r, w, h), [r]);
+  const fillRender = useCallback((w: number, h: number) => svgFillSection(r, w, h), [r]);
+  const fillCurveRender = useCallback((w: number, h: number) => svgFillCurve(r, w, h), [r]);
+  const tractionRender = useCallback((w: number, h: number) => svgTraction(r, w, h), [r]);
+
+  const worstMargin = r.profile.curves.length ? Math.min(...r.profile.curves.map(c => Number.isFinite(c.marginPct) ? c.marginPct : -999)) : NaN;
+
+  // ── STYLES (injected as a <style> tag) ─────────────────────────────────────
+  const css = `
+    :root{--bg:#f8f7f3;--panel:#fefdf6;--gold:#e9c168;--gold-dark:#8a6d2f;--text:#333;--muted:#5f5b54;--border:#d9d5cb;--soft:#f4ead3;--ok:#216b45;--warn:#9b6a1d;--bad:#9b2c2c;--shadow:0 12px 30px rgba(0,0,0,0.08);--accent:#cfac6d;--blue:#325d88;--rose:#8f4454}
+    html[data-theme="dark"]{--bg:#131923;--panel:#1c2531;--gold:#b48d3d;--gold-dark:#e1b86c;--text:#f3eee4;--muted:#cbc1b1;--border:#3b4656;--soft:#2b3443;--ok:#8cd8ab;--warn:#f0c46a;--bad:#f19696;--shadow:0 14px 34px rgba(0,0,0,0.30);--accent:#d1ae6a;--blue:#88abd4;--rose:#d69aaa}
+    *{box-sizing:border-box} html,body{margin:0;padding:0}
+    body{font-family:Inter,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text)}
+    input,select,button{font:inherit}
+    .cema-header{position:sticky;top:0;z-index:20;background:var(--gold);border-bottom:1px solid rgba(0,0,0,0.08);box-shadow:0 2px 8px rgba(0,0,0,0.08)}
+    .cema-header-inner{max-width:1580px;margin:0 auto;padding:18px 24px;display:grid;grid-template-columns:280px 1fr auto;gap:16px;align-items:center}
+    .cema-brand{display:flex;align-items:center;gap:12px;font-weight:800}
+    .cema-brand-mark{width:46px;height:46px;border-radius:12px;background:rgba(255,255,255,0.55);display:grid;place-items:center;border:1px solid rgba(0,0,0,0.08)}
+    .cema-header-title{text-align:center;font-family:"Times New Roman",Times,serif;font-size:34px;font-weight:700;line-height:1.05;color:#111;letter-spacing:-0.02em}
+    .cema-header-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+    .cema-btn{border:1px solid rgba(0,0,0,0.08);background:#333;color:#cfac6d;border-radius:10px;padding:10px 14px;font-weight:700;font-size:13px;cursor:pointer}
+    .cema-btn.secondary{background:rgba(255,255,255,0.55);color:#111}
+    .cema-shell{max-width:1580px;margin:0 auto;padding:24px}
+    .cema-tool{display:grid;grid-template-columns:410px minmax(0,1fr);gap:22px;align-items:start}
+    .cema-left{position:sticky;top:106px;display:grid;gap:18px}
+    .cema-panel{background:var(--panel);border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:var(--shadow)}
+    .cema-panel-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:14px 18px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,rgba(233,193,104,0.14),rgba(233,193,104,0.03))}
+    .cema-panel-title h3{margin:0;font-size:17px;font-weight:800}
+    .cema-panel-title p{margin:4px 0 0;font-size:12px;color:var(--muted)}
+    .cema-panel-inner{padding:18px}
+    .cema-section-heading{margin:0 0 12px;font-size:14px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--gold);padding-bottom:8px}
+    .cema-input-row{margin-bottom:14px}
+    .cema-input-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:6px}
+    .cema-input-head label{font-size:13px;font-weight:700;color:var(--muted);line-height:1.3}
+    .cema-input-wrap{display:flex;gap:8px;align-items:center}
+    .cema-input-row input,.cema-input-row select{width:132px;border:1px solid var(--border);background:white;color:var(--text);border-radius:8px;padding:8px 10px;text-align:right}
+    html[data-theme="dark"] .cema-input-row input,html[data-theme="dark"] .cema-input-row select{background:#111720;color:var(--text)}
+    .cema-input-row input[type="text"]{text-align:left;width:170px}
+    .cema-unit-chip{display:inline-flex;align-items:center;justify-content:center;padding:4px 8px;border-radius:999px;background:var(--soft);border:1px solid rgba(0,0,0,0.05);color:var(--text);font-size:11px;font-weight:700;white-space:nowrap}
+    .cema-helper{font-size:11px;color:#7c7c7c;line-height:1.4;margin-top:4px}
+    .cema-check-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 10px;border:1px dashed var(--border);border-radius:10px;margin-bottom:10px;background:rgba(255,255,255,0.45)}
+    html[data-theme="dark"] .cema-check-row{background:rgba(17,23,32,0.5)}
+    .cema-check-row label{font-size:13px;font-weight:700;color:var(--muted);display:flex;align-items:center;gap:8px}
+    .cema-check-row input[type="checkbox"]{width:16px;height:16px;accent-color:var(--gold-dark)}
+    .cema-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;border:1px solid rgba(0,0,0,0.08);white-space:nowrap}
+    .cema-badge.ok{background:rgba(33,107,69,.1);color:var(--ok)}
+    .cema-badge.warn{background:rgba(155,106,29,.12);color:var(--warn)}
+    .cema-badge.bad{background:rgba(155,44,44,.12);color:var(--bad)}
+    .cema-badge.info{background:rgba(207,172,109,.14);color:var(--text)}
+    .cema-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
+    .cema-metric-card{position:relative;overflow:hidden;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px 14px 12px;box-shadow:0 5px 14px rgba(0,0,0,0.05)}
+    .cema-metric-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--gold);opacity:.85}
+    .cema-metric-card.ok::before{background:var(--ok)}
+    .cema-metric-card.warn::before{background:var(--warn)}
+    .cema-metric-card.bad::before{background:var(--bad)}
+    .cema-metric-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:800;margin-bottom:8px}
+    .cema-metric-value{font-size:30px;line-height:1;font-weight:900;letter-spacing:-0.03em;font-variant-numeric:tabular-nums}
+    .cema-metric-card.primary .cema-metric-value{color:var(--gold-dark)}
+    .cema-metric-sub{margin-top:6px;font-size:12px;color:var(--muted)}
+    .cema-viz-grid,.cema-bottom-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;margin-bottom:18px}
+    .cema-checks-table{width:100%;border-collapse:collapse;font-size:13px;background:white;border-radius:12px;overflow:hidden;border:1px solid var(--border)}
+    html[data-theme="dark"] .cema-checks-table{background:#1b2330}
+    .cema-checks-table th,.cema-checks-table td{padding:10px 12px;border-bottom:1px solid #ece8dd;text-align:left;vertical-align:middle}
+    html[data-theme="dark"] .cema-checks-table th,html[data-theme="dark"] .cema-checks-table td{border-bottom-color:var(--border)}
+    .cema-checks-table th{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);background:#faf8f1}
+    html[data-theme="dark"] .cema-checks-table th{background:#202937}
+    .cema-checks-table tr:last-child td{border-bottom:none}
+    .mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .cema-warning-list{display:grid;gap:10px}
+    .cema-warning-item{border-left:4px solid var(--gold);background:white;border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.45;box-shadow:0 1px 5px rgba(0,0,0,.05)}
+    html[data-theme="dark"] .cema-warning-item{background:#1b2330}
+    .cema-warning-item.ok{border-left-color:var(--ok)}
+    .cema-warning-item.warn{border-left-color:var(--warn)}
+    .cema-warning-item.bad{border-left-color:var(--bad)}
+    .cema-basis-body{display:grid;gap:14px;font-size:13px;line-height:1.55}
+    .cema-basis-box{background:white;border:1px solid var(--border);border-radius:12px;padding:12px 14px}
+    html[data-theme="dark"] .cema-basis-box{background:#1b2330}
+    .cema-basis-box h4{margin:0 0 8px;font-size:14px;font-weight:800}
+    .cema-eq-line{display:flex;justify-content:space-between;gap:16px;padding:6px 0;border-bottom:1px dashed #e7dfcf}
+    .cema-eq-line:last-child{border-bottom:none}
+    .cema-eq-line .lhs{font-weight:700}
+    .cema-eq-line .rhs{color:var(--muted);text-align:right}
+    .cema-helper-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px}
+    .cema-helper-card{padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:rgba(255,255,255,.55)}
+    html[data-theme="dark"] .cema-helper-card{background:#1b2330}
+    .cema-helper-card strong{display:block;font-size:12px;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+    .cema-helper-card span{font-size:13px;font-weight:800}
+    .cema-profile-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+    .cema-profile-chip{padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:rgba(255,255,255,.55)}
+    html[data-theme="dark"] .cema-profile-chip{background:#1b2330}
+    .cema-profile-chip strong{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;margin-bottom:4px}
+    .cema-profile-shell{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(340px,0.9fr);gap:18px}
+    .cema-toolbar-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+    .cema-mini-btn{border:1px solid rgba(0,0,0,0.08);background:rgba(255,255,255,0.65);color:var(--text);border-radius:8px;padding:7px 10px;font-weight:700;font-size:12px;cursor:pointer}
+    html[data-theme="dark"] .cema-mini-btn{background:#202937}
+    .cema-mini-btn.danger{color:var(--bad)}
+    .cema-mini-btn.primary{background:var(--gold);color:#111}
+    .cema-profile-table{width:100%;border-collapse:collapse;font-size:12px;background:white;border:1px solid var(--border);border-radius:10px;overflow:hidden}
+    html[data-theme="dark"] .cema-profile-table{background:#1b2330}
+    .cema-profile-table th,.cema-profile-table td{padding:8px;border-bottom:1px solid #ece8dd;text-align:left;vertical-align:middle}
+    html[data-theme="dark"] .cema-profile-table th,html[data-theme="dark"] .cema-profile-table td{border-bottom-color:var(--border)}
+    .cema-profile-table th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);background:#faf8f1}
+    html[data-theme="dark"] .cema-profile-table th{background:#202937}
+    .cema-profile-table td input,.cema-profile-table td select{width:100%;min-width:0;border:1px solid var(--border);background:white;color:var(--text);border-radius:7px;padding:6px 7px;text-align:right}
+    html[data-theme="dark"] .cema-profile-table td input,html[data-theme="dark"] .cema-profile-table td select{background:#111720}
+    .cema-profile-table td input[type="text"]{text-align:left}
+    .cema-curve-table-wrap{max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:12px}
+    @media(max-width:1280px){.cema-tool{grid-template-columns:1fr}.cema-left{position:static}.cema-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.cema-viz-grid,.cema-bottom-grid{grid-template-columns:1fr}.cema-header-inner{grid-template-columns:1fr}.cema-profile-shell{grid-template-columns:1fr}.cema-profile-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media(max-width:720px){.cema-shell{padding:16px}.cema-metrics{grid-template-columns:1fr}.cema-profile-summary{grid-template-columns:1fr}}
+  `;
+
   return (
-    <div style={{
-      background: palette.bg0, color: palette.text,
-      fontFamily: 'Inter, "Segoe UI", system-ui, sans-serif',
-      margin: "-12px", minHeight: "100%", borderRadius: 8,
-    }}>
-      {/* HEADER */}
-      <div style={{
-        background: `linear-gradient(135deg, ${palette.primaryDark}, ${palette.primary})`,
-        padding: "16px 22px", borderRadius: "8px 8px 0 0",
-        display: "flex", justifyContent: "space-between", alignItems: "center",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{
-            width: 44, height: 44, borderRadius: 10,
-            background: "rgba(255,255,255,0.14)", display: "grid", placeItems: "center",
-            border: "1px solid rgba(255,255,255,0.22)", color: palette.copper, fontSize: 22, fontWeight: 800,
-          }}>↗</div>
+    <>
+      <style dangerouslySetInnerHTML={{ __html: css }} />
+
+      {/* ── Header ── */}
+      <header className="cema-header">
+        <div className="cema-header-inner">
+          <div className="cema-brand">
+            <div className="cema-brand-mark" aria-hidden>
+              <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="none" width="36" height="36">
+                <rect x="8" y="26" width="48" height="12" rx="6" stroke="#8A6D2F" strokeWidth="4"/>
+                <circle cx="16" cy="32" r="6" fill="#8A6D2F" opacity="0.35"/>
+                <circle cx="48" cy="32" r="6" fill="#8A6D2F" opacity="0.35"/>
+                <path d="M10 22L18 14M54 42L46 50" stroke="#8A6D2F" strokeWidth="3.5" strokeLinecap="round"/>
+              </svg>
+            </div>
+            <div>
+              <small style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.08em', color: 'rgba(0,0,0,.66)' }}>Bulk conveyor worksheet</small>
+              <strong style={{ display: 'block', fontSize: 18 }}>CEMA 7 power sizing</strong>
+            </div>
+          </div>
           <div>
-            <div style={{ color: "#fff", fontSize: 20, fontWeight: 700, letterSpacing: 0.3 }}>Transportador de Correia</div>
-            <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 11, marginTop: 2 }}>CEMA 7th Edition · Análise Completa (Belt Analyst-style)</div>
+            <div className="cema-header-title">CEMA 7th Edition Conveyor Power Worksheet</div>
+            <div style={{ textAlign: 'center', fontSize: 12, letterSpacing: '.06em', textTransform: 'uppercase', color: 'rgba(0,0,0,.72)', marginTop: 4 }}>Historical method worksheet with metric inputs and English-only interface</div>
+          </div>
+          <div className="cema-header-actions">
+            <button className="cema-btn secondary" onClick={() => dispatch({ type: 'LOAD_SAMPLE' })}>Load sample</button>
+            <button className="cema-btn secondary" onClick={() => dispatch({ type: 'RESET' })}>Reset defaults</button>
+            <button className="cema-btn secondary" onClick={() => dispatch({ type: 'SET', field: 'theme', value: state.theme === 'dark' ? 'light' : 'dark' })}>{state.theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
+            <button className="cema-btn" onClick={save}>Save tool inputs</button>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button onClick={() => setTheme(t => t === "dark" ? "light" : "dark")} style={{
-            background: "rgba(255,255,255,0.15)", color: "#fff", border: "1px solid rgba(255,255,255,0.25)",
-            borderRadius: 6, padding: "7px 12px", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
-          }}>{theme === "dark" ? "☼ Claro" : "☾ Escuro"}</button>
-          {SavedCalcs && <SavedCalcs user={user} moduleType="transportador" onLoad={handleLoad}/>}
-          <button onClick={() => onSave?.({ type: "transportador", inp, res, pulleys })} style={{
-            background: palette.copper, color: "#fff", border: "none", borderRadius: 6,
-            padding: "8px 14px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
-          }}>SALVAR</button>
-        </div>
-      </div>
+      </header>
 
-      {/* TAB BAR */}
-      <div style={{
-        display: "flex", gap: 4, padding: "10px 14px 0", background: palette.bg1,
-        borderBottom: `1px solid ${palette.border}`, flexWrap: "wrap",
-      }}>
-        {tabs.map(t => (
-          <button key={t.i} onClick={() => setTab(t.i)} style={{
-            background: tab === t.i ? palette.bg0 : "transparent",
-            color: tab === t.i ? palette.copper : palette.muted,
-            border: `1px solid ${tab === t.i ? palette.border : "transparent"}`,
-            borderBottom: tab === t.i ? `1px solid ${palette.bg0}` : `1px solid transparent`,
-            borderRadius: "6px 6px 0 0", padding: "8px 14px", fontSize: 11, fontWeight: tab === t.i ? 700 : 500,
-            cursor: "pointer", fontFamily: "inherit", marginBottom: -1,
-          }}>{t.l}</button>
-        ))}
-      </div>
-
-      {/* MÉTRICAS PRINCIPAIS (sempre visíveis) */}
-      <div style={{
-        display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: 8,
-        padding: "14px 14px 0", background: palette.bg0,
-      }}>
-        {[
-          { l: "Capacidade", v: res?.cap_real?.toFixed(0) || "—", u: "t/h", c: res?.cap_ok ? palette.ok : palette.bad },
-          { l: "Velocidade", v: res?.V?.toFixed(2) || "—", u: "m/s", c: palette.text },
-          { l: "Te", v: res?.Te?.toFixed(0) || "—", u: "kgf", c: palette.text },
-          { l: "T1 / Tad", v: res ? `${res.T1.toFixed(0)} / ${res.Tad.toFixed(0)}` : "—", u: "kgf", c: res?.tension_ok ? palette.ok : palette.bad },
-          { l: "Potência", v: res?.N_kw?.toFixed(1) || "—", u: "kW", c: palette.copper },
-          { l: "P/motor", v: res?.N_per_kw?.toFixed(1) || "—", u: "kW", c: palette.copper },
-          { l: "Redução", v: res?.i_red?.toFixed(1) || "—", u: ":1", c: palette.text },
-          { l: "Au real", v: res?.fa?.Au?.toFixed(3) || "—", u: "m²", c: palette.text },
-        ].map((m, i) => (
-          <div key={i} style={{
-            background: palette.bg1, border: `1px solid ${palette.border}`, borderLeft: `3px solid ${m.c}`,
-            borderRadius: 6, padding: "8px 10px",
-          }}>
-            <div style={{ color: palette.muted, fontSize: 9, fontWeight: 600, textTransform: "uppercase" }}>{m.l}</div>
-            <div style={{ color: m.c, fontSize: 16, fontWeight: 700, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
-            <div style={{ color: palette.muted, fontSize: 9 }}>{m.u}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* CONTENT */}
-      <div style={{ padding: 14 }}>
-
-        {/* === MATERIAL === */}
-        {tab === 0 && (
-          <>
-            <div style={card}>
-              <div style={cardTitle}>Material Transportado</div>
-              <div style={grid(4)}>
-                <SelField p={palette} label="Material" val={inp.mat_key} set={(v: any) => s("mat_key", v)}
-                  opts={Object.keys(MATERIAL_DB).map(k => ({ v: k, l: MATERIAL_DB[k].name }))}/>
-                <FField p={palette} label="Densidade" val={inp.mat_d} set={(v: any) => s("mat_d", v)} unit="kg/m³"/>
-                <FField p={palette} label="Capacidade" val={inp.cap_th} set={(v: any) => s("cap_th", v)} unit="t/h"/>
-                <FField p={palette} label="Surcharge angle Φs" val={inp.phi_s} set={(v: any) => s("phi_s", v)} unit="°"/>
-                <FField p={palette} label="Ângulo máx. transp." val={inp.phi_max_mat} set={(v: any) => s("phi_max_mat", v)} unit="°"/>
+      <main className="cema-shell">
+        <div className="cema-tool">
+          {/* ══ LEFT COLUMN — Inputs ══ */}
+          <div className="cema-left">
+            <section className="cema-panel">
+              <div className="cema-panel-title">
+                <div><h3>Inputs</h3><p>Metric entry fields, CEMA historical-method logic, and manual hooks for standard lookup factors.</p></div>
+                <span className={`cema-badge ${statusLevel}`}>{!Number.isFinite(r.teLbf) ? 'Check inputs' : r.dutyMode === 'Regenerative' ? 'Regenerative duty' : 'Motoring duty'}</span>
               </div>
-              <div style={{ marginTop: 14, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 11, color: palette.muted }}>
-                <strong style={{ color: palette.copper }}>Φs (surcharge):</strong> ângulo formado pelo material em movimento sobre a correia.
-                Determina a área do "cap" superior na seção. Tipicamente 5°-10° abaixo do ângulo de repouso.
-                <br/>
-                <strong style={{ color: palette.copper }}>Φ máx:</strong> inclinação máxima na qual o material não escorrega.
-                CEMA recomenda margem de 2°-5° abaixo deste valor.
-              </div>
-            </div>
-            <div style={card}>
-              <div style={cardTitle}>Seção Transversal</div>
-              <div style={{ maxWidth: 360 }}>
-                <AreaSection inp={inp} res={res} palette={palette}/>
-              </div>
-              {res?.fa && (
-                <div style={{ ...grid(3), marginTop: 12 }}>
-                  {[
-                    { l: "Área útil Au", v: (res.fa.Au * 10000).toFixed(2), u: "cm²" },
-                    { l: "Au ref. CEMA (35°/20°)", v: (res.fa_ref.Au * 10000).toFixed(2), u: "cm²" },
-                    { l: "Fator utilização Ku", v: res.Ku.toFixed(3), u: "-", c: res.Ku > 1.05 ? palette.bad : res.Ku < 0.5 ? palette.warn : palette.ok },
-                    { l: "Largura útil b", v: (res.fa.b_util * 1000).toFixed(0), u: "mm" },
-                    { l: "Altura calha", v: (res.fa.h_trough * 1000).toFixed(1), u: "mm" },
-                    { l: "Altura cap surcharge", v: (res.fa.h_cap * 1000).toFixed(1), u: "mm" },
-                  ].map((m, i) => (
-                    <div key={i} style={{ background: palette.bg0, borderLeft: `3px solid ${m.c || palette.primary}`, borderRadius: 5, padding: "8px 10px" }}>
-                      <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" as const }}>{m.l}</div>
-                      <div style={{ fontSize: 15, color: m.c || palette.text, fontWeight: 700, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
-                      <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </>
-        )}
+              <div className="cema-panel-inner">
 
-        {/* === GEOMETRIA === */}
-        {tab === 1 && (
-          <div style={card}>
-            <div style={cardTitle}>Perfil Geométrico (Multi-Trecho)</div>
-            <div style={{ marginBottom: 12, color: palette.muted, fontSize: 11 }}>
-              Defina até 4 trechos consecutivos com comprimentos e ângulos diferentes.
-              Ângulos positivos = subida, negativos = descida. Mudanças de inclinação criam curvas (côncava ou convexa).
-            </div>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-              <thead>
-                <tr style={{ borderBottom: `1px solid ${palette.border}` }}>
-                  <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Trecho</th>
-                  <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Comprimento (m)</th>
-                  <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Ângulo (°)</th>
-                  <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Tipo</th>
-                  <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {inp.segments.map((seg: any, i: number) => {
-                  const next = inp.segments[i + 1];
-                  const tipo = !next ? "—" : (next.ang > seg.ang ? "côncava" : next.ang < seg.ang ? "convexa" : "reta");
-                  return (
-                    <tr key={i} style={{ borderBottom: `1px solid ${palette.border}` }}>
-                      <td style={{ padding: 8, color: palette.copper, fontWeight: 700 }}>{i + 1}</td>
-                      <td style={{ padding: 8 }}>
-                        <input type="number" value={seg.comp} step={1}
-                          onChange={(e: any) => {
-                            const v = +e.target.value;
-                            setI(p => ({ ...p, segments: p.segments.map((s: any, j: number) => j === i ? { ...s, comp: v } : s) }));
-                          }}
-                          style={{ ...inputSty, width: 100 }}/>
-                      </td>
-                      <td style={{ padding: 8 }}>
-                        <input type="number" value={seg.ang} step={0.5}
-                          onChange={(e: any) => {
-                            const v = +e.target.value;
-                            setI(p => ({ ...p, segments: p.segments.map((s: any, j: number) => j === i ? { ...s, ang: v } : s) }));
-                          }}
-                          style={{ ...inputSty, width: 100 }}/>
-                      </td>
-                      <td style={{ padding: 8, color: palette.muted, fontSize: 11 }}>{tipo}</td>
-                      <td style={{ padding: 8 }}>
-                        {inp.segments.length > 1 && (
-                          <button onClick={() => setI(p => ({ ...p, segments: p.segments.filter((_: any, j: number) => j !== i) }))}
-                            style={{ background: palette.bad, color: "#fff", border: "none", borderRadius: 4, padding: "4px 10px", cursor: "pointer", fontSize: 10, fontFamily: "inherit" }}>
-                            Remover
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {inp.segments.length < 4 && (
-              <button onClick={() => setI(p => ({ ...p, segments: [...p.segments, { comp: 10, ang: 0 }] }))}
-                style={{
-                  marginTop: 12, background: palette.primary, color: "#fff", border: "none",
-                  borderRadius: 5, padding: "8px 14px", fontSize: 11, fontWeight: 600,
-                  cursor: "pointer", fontFamily: "inherit",
-                }}>
-                + Adicionar Trecho
-              </button>
-            )}
+                {/* Project */}
+                <h4 className="cema-section-heading">Project</h4>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Project</label><div className="cema-input-wrap"><input type="text" value={state.projectName} onChange={set('projectName')} /></div></div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Conveyor tag</label><div className="cema-input-wrap"><input type="text" value={state.conveyorTag} onChange={set('conveyorTag')} /></div></div></div>
 
-            {res && (
-              <div style={{ marginTop: 16, padding: 12, background: palette.bg0, borderRadius: 6 }}>
-                <div style={lbl}>Resumo Geométrico</div>
-                <div style={{ ...grid(4), marginTop: 8 }}>
-                  <div><span style={{ color: palette.muted, fontSize: 10 }}>L total: </span><strong style={{ color: palette.text }}>{res.L_total.toFixed(1)} m</strong></div>
-                  <div><span style={{ color: palette.muted, fontSize: 10 }}>L horizontal: </span><strong style={{ color: palette.text }}>{res.L_h.toFixed(1)} m</strong></div>
-                  <div><span style={{ color: palette.muted, fontSize: 10 }}>H total: </span><strong style={{ color: palette.text }}>{res.H_total.toFixed(2)} m</strong></div>
-                  <div><span style={{ color: palette.muted, fontSize: 10 }}>β eq: </span><strong style={{ color: palette.copper }}>{res.beta_eq.toFixed(2)}°</strong></div>
-                  <div><span style={{ color: palette.muted, fontSize: 10 }}>R mín. convexa: </span><strong style={{ color: palette.text }}>{res.radii.R_convex.toFixed(0)} m</strong></div>
-                  <div><span style={{ color: palette.muted, fontSize: 10 }}>R mín. côncava: </span><strong style={{ color: palette.text }}>{res.radii.R_concave.toFixed(0)} m</strong></div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+                {/* Duty & geometry */}
+                <h4 className="cema-section-heading">Duty &amp; geometry</h4>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Capacity</label><div className="cema-input-wrap"><span className="cema-unit-chip">t/h</span><input type="number" step="1" value={state.capacityTph} onChange={set('capacityTph')} /></div></div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Belt speed</label><div className="cema-input-wrap"><span className="cema-unit-chip">m/s</span><input type="number" step="0.01" value={state.beltSpeed} onChange={set('beltSpeed')} /></div></div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Material entry speed</label><div className="cema-input-wrap"><span className="cema-unit-chip">m/s</span><input type="number" step="0.01" value={state.materialEntrySpeed} onChange={set('materialEntrySpeed')} /></div></div><div className="cema-helper">Velocity component in belt travel direction for Tam calculation.</div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Conveyor center length</label><div className="cema-input-wrap"><span className="cema-unit-chip">m</span><input type="number" step="0.1" value={state.centerLengthM} onChange={set('centerLengthM')} /></div></div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Vertical lift (+) or drop (-)</label><div className="cema-input-wrap"><span className="cema-unit-chip">m</span><input type="number" step="0.1" value={state.liftM} onChange={set('liftM')} /></div></div><div className="cema-helper">Positive for lift, negative for decline. Flags regenerative duty if net power is negative.</div></div>
 
-        {/* === CORREIA / ROLETES === */}
-        {tab === 2 && (
-          <>
-            <div style={card}>
-              <div style={cardTitle}>Correia</div>
-              <div style={grid(4)}>
-                <SelField p={palette} label="Largura" val={inp.larg_pol} set={(v: any) => s("larg_pol", +v)}
-                  opts={BW_OPTIONS.map(b => ({ v: b, l: `${b}" (${(b * 25.4).toFixed(0)} mm)` }))}/>
-                <FField p={palette} label="Velocidade" val={inp.vel_ms} set={(v: any) => s("vel_ms", v)} unit="m/s" step={0.1}/>
-                <FField p={palette} label="Peso correia (Wb)" val={inp.Wb} set={(v: any) => s("Wb", v)} unit="kgf/m" step={0.1}/>
-                <FField p={palette} label="Ângulo rolete (λ)" val={inp.ang_rol} set={(v: any) => s("ang_rol", v)} unit="°"/>
-                <FField p={palette} label="Nº de lonas" val={inp.n_lonas} set={(v: any) => s("n_lonas", v)}/>
-                <FField p={palette} label="Resist. lonas" val={inp.cap_tens} set={(v: any) => s("cap_tens", v)} unit="N/m" step={100}/>
-              </div>
-            </div>
-            <div style={card}>
-              <div style={cardTitle}>Roletes</div>
-              <div style={grid(4)}>
-                <SelField p={palette} label="Classe CEMA" val={inp.idler_cl} set={(v: any) => s("idler_cl", v)}
-                  opts={Object.keys(IDLER_CLASS).map(k => ({ v: k, l: IDLER_CLASS[k].l }))}/>
-                <FField p={palette} label="Espaç. carga (Si)" val={inp.esp_rol} set={(v: any) => s("esp_rol", v)} unit="m" step={0.1}/>
-                <FField p={palette} label="Espaç. retorno" val={inp.esp_rol_ret} set={(v: any) => s("esp_rol_ret", v)} unit="m" step={0.1}/>
-                <FField p={palette} label="Peso rolete carga" val={inp.p_rol_carga} set={(v: any) => s("p_rol_carga", v)} unit="kgf"/>
-                <FField p={palette} label="Peso rolete retorno" val={inp.p_rol_ret} set={(v: any) => s("p_rol_ret", v)} unit="kgf"/>
-                <FField p={palette} label="Diâm. rolo (d_idler)" val={inp.d_idler_mm} set={(v: any) => s("d_idler_mm", v)} unit="mm"/>
-              </div>
-            </div>
-            <div style={card}>
-              <div style={cardTitle}>Seção Transversal — Área de Enchimento</div>
-              <CrossSection inp={inp} res={res} palette={palette}/>
-            </div>
-          </>
-        )}
+                {/* Belt & load */}
+                <h4 className="cema-section-heading">Belt &amp; load</h4>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Belt width</label><div className="cema-input-wrap"><span className="cema-unit-chip">mm</span><input type="number" step="1" value={state.beltWidthMm} onChange={set('beltWidthMm')} /></div></div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Bulk density</label><div className="cema-input-wrap"><span className="cema-unit-chip">t/m³</span><input type="number" step="0.01" value={state.bulkDensity} onChange={set('bulkDensity')} /></div></div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Trough angle (idler angle)</label><div className="cema-input-wrap"><span className="cema-unit-chip">deg</span><select value={state.troughAngleDeg} onChange={set('troughAngleDeg')}>{TROUGH_ANGLES.map(a => <option key={a} value={a}>{a}°</option>)}</select></div></div><div className="cema-helper">Standard options: 0°, 15°, 35°, and 45°.</div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Surcharge angle</label><div className="cema-input-wrap"><span className="cema-unit-chip">deg</span><input type="number" step="1" value={state.surchargeAngleDeg} onChange={set('surchargeAngleDeg')} /></div></div><div className="cema-helper">Used in the geometric cross-section model for the live material surface.</div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Center roll fraction</label><div className="cema-input-wrap"><span className="cema-unit-chip">0–1</span><input type="number" step="0.01" value={state.centerRollFraction} onChange={set('centerRollFraction')} /></div></div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Edge freeboard</label><div className="cema-input-wrap"><span className="cema-unit-chip">% B</span><input type="number" step="1" value={state.edgeFreeboardPct} onChange={set('edgeFreeboardPct')} /></div></div></div>
+                <div className="cema-check-row"><label><input type="checkbox" checked={state.useEstimatedBeltWeight} onChange={set('useEstimatedBeltWeight')} />Use CEMA average belt-weight estimate</label><span className={`cema-badge ${state.useEstimatedBeltWeight ? 'ok' : 'info'}`}>{state.useEstimatedBeltWeight ? 'Estimated' : 'Manual'}</span></div>
+                <div className="cema-check-row"><label><input type="checkbox" checked={state.steelCord} onChange={set('steelCord')} />Steel-cord belt (+50% estimate)</label><span className="cema-unit-chip">optional</span></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Belt weight</label><div className="cema-input-wrap"><span className="cema-unit-chip">kg/m</span><input type="number" step="0.1" value={state.beltWeightKgPm} onChange={set('beltWeightKgPm')} disabled={state.useEstimatedBeltWeight} /></div></div><div className="cema-helper">Manual weight from belt vendor, or auto-filled from the CEMA estimate table when the checkbox is enabled.</div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Carrying idler spacing</label><div className="cema-input-wrap"><span className="cema-unit-chip">m</span><input type="number" step="0.01" value={state.idlerSpacingM} onChange={set('idlerSpacingM')} /></div></div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Sag criterion</label><div className="cema-input-wrap"><span className="cema-unit-chip">%</span><select value={state.sagPercent} onChange={set('sagPercent')}>{SAG_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}</select></div></div><div className="cema-helper">Used for the T0 / T2 sag check, assuming a single head drive arrangement.</div></div>
 
-        {/* === TAMBORES === */}
-        {tab === 3 && (
-          <>
-            <div style={card}>
-              <div style={cardTitle}>Tambor Motor (Cabeça)</div>
-              <div style={grid(4)}>
-                <FField p={palette} label="Diâmetro" val={inp.d_tamb_mm} set={(v: any) => s("d_tamb_mm", v)} unit="mm"/>
-                <FField p={palette} label="Ângulo abraçamento" val={inp.ang_abr} set={(v: any) => s("ang_abr", v)} unit="°"/>
-                <FField p={palette} label="μ (atrito lagging)" val={inp.mu_lag} set={(v: any) => s("mu_lag", v)} step={0.05}/>
-              </div>
-            </div>
-            <div style={card}>
-              <div style={cardTitle}>Tambores no Sistema (Posicionáveis)</div>
-              <div style={{ color: palette.muted, fontSize: 11, marginBottom: 12 }}>
-                Configure cada tambor: tipo, posição (m), e lado (carga/retorno). Você também pode arrastar visualmente na aba "2D Interativo".
-              </div>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                <thead>
-                  <tr style={{ borderBottom: `1px solid ${palette.border}` }}>
-                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Nome</th>
-                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Tipo</th>
-                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Posição (m)</th>
-                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Lado</th>
-                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Ações</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pulleys.map((p, i) => (
-                    <tr key={i} style={{ borderBottom: `1px solid ${palette.border}` }}>
-                      <td style={{ padding: 6 }}>
-                        <input value={p.name} onChange={(e: any) => setPulleys(prev => prev.map((q, j) => j === i ? { ...q, name: e.target.value } : q))}
-                          style={{ ...inputSty, width: 220 }}/>
-                      </td>
-                      <td style={{ padding: 6 }}>
-                        <select value={p.type} onChange={(e: any) => setPulleys(prev => prev.map((q, j) => j === i ? { ...q, type: e.target.value } : q))}
-                          style={{ ...inputSty, width: 120 }}>
-                          <option value="drive">Motor</option>
-                          <option value="tail">Cauda</option>
-                          <option value="takeup">Tensionamento</option>
-                          <option value="snub">Snub (desvio)</option>
-                          <option value="bend">Bend (retorno)</option>
-                        </select>
-                      </td>
-                      <td style={{ padding: 6 }}>
-                        <input type="number" value={p.x.toFixed(2)} step={0.5}
-                          onChange={(e: any) => setPulleys(prev => prev.map((q, j) => j === i ? { ...q, x: +e.target.value } : q))}
-                          style={{ ...inputSty, width: 90 }}/>
-                      </td>
-                      <td style={{ padding: 6 }}>
-                        <select value={p.side} onChange={(e: any) => setPulleys(prev => prev.map((q, j) => j === i ? { ...q, side: e.target.value } : q))}
-                          style={{ ...inputSty, width: 100 }}>
-                          <option value="top">Carga</option>
-                          <option value="bot">Retorno</option>
-                        </select>
-                      </td>
-                      <td style={{ padding: 6 }}>
-                        <button onClick={() => setPulleys(prev => prev.filter((_, j) => j !== i))}
-                          style={{ background: palette.bad, color: "#fff", border: "none", borderRadius: 4, padding: "4px 10px", cursor: "pointer", fontSize: 10, fontFamily: "inherit" }}>
-                          Remover
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <button onClick={() => setPulleys(prev => [...prev, { name: "Novo tambor", label: `${prev.length + 1}`, type: "bend", x: 5, side: "bot" }])}
-                style={{
-                  marginTop: 12, background: palette.primary, color: "#fff", border: "none",
-                  borderRadius: 5, padding: "8px 14px", fontSize: 11, fontWeight: 600,
-                  cursor: "pointer", fontFamily: "inherit",
-                }}>
-                + Adicionar Tambor
-              </button>
-            </div>
-          </>
-        )}
+                {/* CEMA factors */}
+                <h4 className="cema-section-heading">CEMA factors</h4>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Idler family / Ai</label><div className="cema-input-wrap"><span className="cema-unit-chip">CEMA</span><select value={state.idlerFamily} onChange={set('idlerFamily')}>{IDLER_FAMILIES.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}</select></div></div></div>
+                <div className="cema-check-row"><label><input type="checkbox" checked={state.twoRollVReturn} onChange={set('twoRollVReturn')} />Two-roll V-return idlers (+5% Ai)</label><span className="cema-unit-chip">Kx note</span></div>
+                <div className="cema-check-row"><label><input type="checkbox" checked={state.overrideKx} onChange={set('overrideKx')} />Override auto Kx</label><span className={`cema-badge ${state.overrideKx ? 'warn' : 'ok'}`}>{state.overrideKx ? 'Manual' : 'Auto'}</span></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Manual Kx</label><div className="cema-input-wrap"><span className="cema-unit-chip">lb/ft²</span><input type="number" step="0.0001" value={state.manualKx} onChange={set('manualKx')} disabled={!state.overrideKx} /></div></div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Ky</label><div className="cema-input-wrap"><span className="cema-unit-chip">factor</span><input type="number" step="0.0001" value={state.ky} onChange={set('ky')} /></div></div><div className="cema-helper">Enter from the CEMA Ky tables after correcting for length, slope, load, and idler spacing.</div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Kt</label><div className="cema-input-wrap"><span className="cema-unit-chip">factor</span><input type="number" step="0.01" value={state.kt} onChange={set('kt')} /></div></div><div className="cema-helper">Ambient-temperature correction factor from the CEMA temperature curve.</div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Cw preset</label><div className="cema-input-wrap"><span className="cema-unit-chip">wrap</span><select value={state.cwPreset} onChange={set('cwPreset')}>{CW_PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select></div></div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Cw</label><div className="cema-input-wrap"><span className="cema-unit-chip">factor</span><input type="number" step="0.01" value={state.cw} onChange={set('cw')} disabled={state.cwPreset !== 'manual'} /></div></div><div className="cema-helper">Wrap factor for the traction / no-slip T2 check.</div></div>
 
-        {/* === TENSIONAMENTO === */}
-        {tab === 4 && (
-          <>
-            <div style={card}>
-              <div style={cardTitle}>Tipo de Tensionamento</div>
-              <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
-                {[
-                  { v: "gravity", l: "Gravidade (Contrapeso)", desc: "Torre vertical com contrapeso. Mantém T2 constante." },
-                  { v: "screw", l: "Parafuso (Screw take-up)", desc: "Ajuste manual via parafuso. Sem absorção dinâmica." },
-                  { v: "automatic", l: "Automático (Winch/Hidráulico)", desc: "Atuador motorizado. Resposta dinâmica controlada." },
-                ].map(opt => (
-                  <button key={opt.v} onClick={() => s("tens_type", opt.v)} style={{
-                    flex: 1, background: inp.tens_type === opt.v ? palette.primary : palette.bg0,
-                    color: inp.tens_type === opt.v ? "#fff" : palette.text,
-                    border: `1px solid ${inp.tens_type === opt.v ? palette.primary : palette.border}`,
-                    borderRadius: 6, padding: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left",
-                  }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>{opt.l}</div>
-                    <div style={{ fontSize: 10, opacity: 0.8 }}>{opt.desc}</div>
-                  </button>
+                {/* Pulleys & accessories */}
+                <h4 className="cema-section-heading">Pulleys &amp; accessories</h4>
+                {([['tightPulleys', 'Tight-side pulleys (150° to 240°)', 'qty'], ['slackPulleys', 'Slack-side pulleys (150° to 240°)', 'qty'], ['otherPulleys', 'Other pulleys (<150° wrap)', 'qty'], ['cleanerBlades', 'Cleaner blades in contact', 'qty'], ['fullPlows', 'Full plows', 'qty'], ['partialPlows', 'Partial plows', 'qty']] as const).map(([f, lbl, u]) => (
+                  <div key={f} className="cema-input-row"><div className="cema-input-head"><label>{lbl}</label><div className="cema-input-wrap"><span className="cema-unit-chip">{u}</span><input type="number" step="1" min="0" value={state[f] as number} onChange={set(f)} /></div></div></div>
                 ))}
-              </div>
+                <div className="cema-check-row"><label><input type="checkbox" checked={state.plainBearings} onChange={set('plainBearings')} />Plain bearings on pulley shafts</label><span className="cema-unit-chip">Tp × 2</span></div>
+                <div className="cema-check-row"><label><input type="checkbox" checked={state.overrideTp} onChange={set('overrideTp')} />Override Tp with manual value</label><span className={`cema-badge ${state.overrideTp ? 'warn' : 'ok'}`}>{state.overrideTp ? 'Manual' : 'Count'}</span></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Manual Tp</label><div className="cema-input-wrap"><span className="cema-unit-chip">lbf</span><input type="number" step="0.1" value={state.manualTpLbf} onChange={set('manualTpLbf')} disabled={!state.overrideTp} /></div></div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Skirtboard length</label><div className="cema-input-wrap"><span className="cema-unit-chip">m</span><input type="number" step="0.1" value={state.skirtLengthM} onChange={set('skirtLengthM')} /></div></div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Material depth at skirtboard</label><div className="cema-input-wrap"><span className="cema-unit-chip">mm</span><input type="number" step="1" value={state.skirtDepthMm} onChange={set('skirtDepthMm')} /></div></div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Cs</label><div className="cema-input-wrap"><span className="cema-unit-chip">factor</span><input type="number" step="0.0001" value={state.csFactor} onChange={set('csFactor')} /></div></div><div className="cema-helper">Skirtboard friction factor for the handled material.</div></div>
+                <div className="cema-check-row"><label><input type="checkbox" checked={state.rubberEdging} onChange={set('rubberEdging')} />Rubber skirtboard edging</label><span className="cema-unit-chip">+6 lb/ft</span></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Other accessory tension</label><div className="cema-input-wrap"><span className="cema-unit-chip">kN</span><input type="number" step="0.01" value={state.otherAccessoryKN} onChange={set('otherAccessoryKN')} /></div></div></div>
 
-              {res && (
-                <div style={{ padding: 14, background: palette.bg0, borderRadius: 6 }}>
-                  {inp.tens_type === "gravity" && (
-                    <>
-                      <div style={lbl}>Peso do Contrapeso Necessário</div>
-                      <div style={{ fontSize: 26, fontWeight: 700, color: palette.copper, marginTop: 4 }}>
-                        {res.Wcp.toFixed(0)} <span style={{ fontSize: 14, color: palette.muted }}>kgf</span>
-                      </div>
-                      <div style={{ fontSize: 11, color: palette.muted, marginTop: 8 }}>
-                        Wcp = 2 × T2 = 2 × {res.T2.toFixed(0)} kgf<br/>
-                        Curso recomendado: {(res.L_total * 0.015).toFixed(2)} m (1.5% do comprimento)
-                      </div>
-                    </>
-                  )}
-                  {inp.tens_type === "screw" && (
-                    <>
-                      <div style={lbl}>Curso do Parafuso de Ajuste</div>
-                      <div style={{ fontSize: 26, fontWeight: 700, color: palette.copper, marginTop: 4 }}>
-                        {res.screw_travel.toFixed(0)} <span style={{ fontSize: 14, color: palette.muted }}>mm</span>
-                      </div>
-                      <div style={{ fontSize: 11, color: palette.muted, marginTop: 8 }}>
-                        Curso = L × 1.5% (elongação típica de correias têxteis)<br/>
-                        ⚠️ Não absorve variações dinâmicas — adequado apenas para L &lt; 60m.
-                      </div>
-                    </>
-                  )}
-                  {inp.tens_type === "automatic" && (
-                    <>
-                      <div style={lbl}>Força Aplicada pelo Atuador</div>
-                      <div style={{ fontSize: 26, fontWeight: 700, color: palette.copper, marginTop: 4 }}>
-                        {res.auto_force.toFixed(0)} <span style={{ fontSize: 14, color: palette.muted }}>kgf</span>
-                      </div>
-                      <div style={{ fontSize: 11, color: palette.muted, marginTop: 8 }}>
-                        F = 2 × T2. Sistema mantém T2 ajustável dinamicamente conforme a carga.
-                      </div>
-                    </>
-                  )}
+                {/* Plugged chute */}
+                <h4 className="cema-section-heading">Plugged chute resistance</h4>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Method</label><div className="cema-input-wrap"><span className="cema-unit-chip">mode</span><select value={state.pluggedChuteMode} onChange={set('pluggedChuteMode')}>{PLUGGED_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</select></div></div></div>
+                <div className="cema-check-row"><label><input type="checkbox" checked={state.pluggedApplyInFlow} onChange={set('pluggedApplyInFlow')} />Include plugged chute resistance in steady-state Te</label><span className="cema-unit-chip">flow</span></div>
+                {([['pluggedWidthMm','Plug width','mm',1],['pluggedHeightMm','Plug height','mm',1],['pluggedLengthM','Plug length','m',0.01],['pluggedWallFriction','Wall friction coefficient, μ','–',0.01],['pluggedShearStressKPa','Bulk shear stress','kPa',0.1],['pluggedStartupFactor','Startup / breakout factor','×',0.01],['manualPluggedFlowKN','Manual plugged-chute force (flow)','kN',0.01]] as const).map(([f, lbl, u, step]) => (
+                  <div key={f} className="cema-input-row"><div className="cema-input-head"><label>{lbl}</label><div className="cema-input-wrap"><span className="cema-unit-chip">{u}</span><input type="number" step={step} value={state[f] as number} onChange={set(f)} /></div></div></div>
+                ))}
+
+                {/* Drive */}
+                <h4 className="cema-section-heading">Drive</h4>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Drive efficiency</label><div className="cema-input-wrap"><span className="cema-unit-chip">%</span><input type="number" step="0.1" value={state.driveEfficiencyPct} onChange={set('driveEfficiencyPct')} /></div></div></div>
+                <div className="cema-input-row"><div className="cema-input-head"><label>Service factor</label><div className="cema-input-wrap"><span className="cema-unit-chip">×</span><input type="number" step="0.01" value={state.serviceFactor} onChange={set('serviceFactor')} /></div></div></div>
+
+                <div className="cema-helper" style={{ marginTop: 12 }}>This worksheet is arranged to match the attached reference style, adapted to a CEMA conveyor power use case.</div>
+              </div>
+            </section>
+          </div>
+
+          {/* ══ RIGHT COLUMN — Outputs ══ */}
+          <div>
+            {/* Metrics grid */}
+            <section className="cema-metrics">
+              {[
+                { id: 'te', label: 'Effective tension, Te', value: `${fmtFixed(lbfToKn(r.teLbf), 2)} kN`, sub: `${fmtFixed(r.teLbf, 0)} lbf effective tension`, cls: `primary ${statusLevel}` },
+                { id: 'bp', label: 'Belt power', value: `${fmtFixed(r.beltKw, 1)} kW`, sub: `${fmtFixed(r.beltHp, 1)} hp at belt speed ${fmtFixed(r.beltSpeed, 2)} m/s`, cls: statusLevel },
+                { id: 'mp', label: 'Motor shaft power', value: `${fmtFixed(r.motorKw, 1)} kW`, sub: `${fmtFixed(r.motorHp, 1)} hp with η=${fmtFixed(r.driveEfficiencyPct, 1)}% · SF=${fmtFixed(r.serviceFactor, 2)} · startup ${fmtFixed(r.startupMotorKw, 1)} kW`, cls: statusLevel },
+                { id: 'mode', label: 'Duty mode', value: r.dutyMode, sub: r.dutyMode === 'Regenerative' ? 'Negative net power; brake or regen review required' : 'Positive net power demand', cls: statusLevel },
+                { id: 't2', label: 'Governing T2', value: `${fmtFixed(lbfToKn(r.t2Lbf), 2)} kN`, sub: `${r.governingSource} governs · slip ${fmtFixed(lbfToKn(r.t2SlipLbf), 2)} kN vs sag ${fmtFixed(lbfToKn(r.t2SagLbf), 2)} kN` },
+                { id: 't1', label: 'Approx. Tmax / T1', value: `${fmtFixed(lbfToKn(r.t1Lbf), 2)} kN`, sub: `${fmtFixed(r.t1Lbf, 0)} lbf approximate maximum tension` },
+                { id: 'wm', label: 'Material load, Wm', value: `${fmtFixed(r.wmKgPm, 1)} kg/m`, sub: `${fmtFixed(r.wmLbft, 1)} lb/ft live load on the belt` },
+                { id: 'kx', label: 'Auto Kx', value: fmtFixed(r.kxUsed, 4), sub: `${r.overrideKx ? 'Manual override' : `Auto from Ai ${fmtFixed(r.aiAdjusted, 2)}`} · Ky ${fmtFixed(r.ky, 4)}` },
+                { id: 'fa', label: 'Loaded area', value: `${fmtFixed(r.occupiedAreaM2, 4)} m²`, sub: `CEMA avail ${fmtFixed(r.cemaAvailableAreaM2, 4)} m² · max ${fmtFixed(r.maxAreaM2, 4)} m²` },
+                { id: 'fp', label: 'Section fill', value: `${fmtFixed(r.fillAreaPct, 1)} %`, sub: `Occupied / CEMA available · edge ${fmtFixed(r.totalEdgeClearanceM * 1000, 0)} mm total (${fmtFixed(r.edgeDistanceM * 1000, 0)} mm/side)` },
+                { id: 'pf', label: 'Plugged chute force, flow', value: `${fmtFixed(r.pluggedFlowKN, 2)} kN`, sub: `${r.pluggedApplyInFlow ? 'Included in Te' : 'Shown only as check'} · ${r.pluggedMethodBasis}` },
+                { id: 'ps', label: 'Plugged chute force, startup', value: `${fmtFixed(r.pluggedStartupKN, 2)} kN`, sub: `Startup breakout force · extra above flow ${fmtFixed(r.pluggedStartupExtraKN, 2)} kN` },
+              ].map(card => (
+                <div key={card.id} className={`cema-metric-card ${card.cls || ''}`}>
+                  <div className="cema-metric-label">{card.label}</div>
+                  <div className="cema-metric-value">{card.value}</div>
+                  <div className="cema-metric-sub">{card.sub}</div>
                 </div>
-              )}
-            </div>
-          </>
-        )}
+              ))}
+            </section>
 
-        {/* === ACIONAMENTO + ACESSÓRIOS === */}
-        {tab === 5 && (
-          <>
-            <div style={card}>
-              <div style={cardTitle}>Motor Elétrico</div>
-              <div style={grid(4)}>
-                <FField p={palette} label="Frequência" val={inp.freq_hz} set={(v: any) => s("freq_hz", v)} unit="Hz"/>
-                <FField p={palette} label="Polos" val={inp.n_polos} set={(v: any) => s("n_polos", v)}/>
-                <FField p={palette} label="Nº acionamentos" val={inp.n_ac} set={(v: any) => s("n_ac", v)}/>
-                <FField p={palette} label="η correias" val={inp.ef_c} set={(v: any) => s("ef_c", v)} step={0.01}/>
-                <FField p={palette} label="η redutor" val={inp.ef_r} set={(v: any) => s("ef_r", v)} step={0.01}/>
-                <FField p={palette} label="η acoplamento" val={inp.ef_a} set={(v: any) => s("ef_a", v)} step={0.01}/>
+            {/* 2D Schematic + Breakdown */}
+            <section className="cema-viz-grid">
+              <div className="cema-panel">
+                <div className="cema-panel-title"><div><h3>2D conveyor schematic</h3><p>Head-drive side view, slope cue, belt speed, throughput, and selected CEMA factors.</p></div><span className="cema-badge info">layout check</span></div>
+                <SvgPanel render={schematicRender} height={320} />
               </div>
-            </div>
-            <div style={card}>
-              <div style={cardTitle}>Acessórios (Resistências Adicionais)</div>
-              <div style={grid(4)}>
-                <FField p={palette} label="Nº limpadores" val={inp.n_limp} set={(v: any) => s("n_limp", v)}/>
-                <FField p={palette} label="Comp. guias" val={inp.comp_guias} set={(v: any) => s("comp_guias", v)} unit="m"/>
-                <FField p={palette} label="Coef. skirt (Cs)" val={inp.Cs} set={(v: any) => s("Cs", v)} step={0.001}/>
-                <FField p={palette} label="Nº plows" val={inp.n_plows} set={(v: any) => s("n_plows", v)}/>
-                <FField p={palette} label="F por plow" val={inp.F_plow} set={(v: any) => s("F_plow", v)} unit="kgf"/>
+              <div className="cema-panel">
+                <div className="cema-panel-title"><div><h3>Tension breakdown</h3><p>Positive and negative Te contributors shown at belt line using the historical method components.</p></div><span className={`cema-badge ${r.components.some(c => c.lbf < 0) ? 'warn' : 'ok'}`}>{r.components.some(c => c.lbf < 0) ? 'mixed signs' : 'all positive'}</span></div>
+                <SvgPanel render={breakdownRender} height={320} />
               </div>
-            </div>
-          </>
-        )}
+            </section>
 
-        {/* === RESULTADOS === */}
-        {tab === 6 && res && (
-          <>
-            <div style={card}>
-              <div style={cardTitle}>Fatores de Segurança — Síntese</div>
-              <div style={grid(4)}>
-                {[
-                  { l: "SF Correia (T1)", v: res.SF_T1.toFixed(2), u: "Tad/T1", c: res.SF_T1 >= 1.2 ? palette.ok : palette.bad },
-                  { l: "SF Correia (belt)", v: res.SF_belt_actual.toFixed(2), u: "real", c: res.belt_ok ? palette.ok : palette.bad },
-                  { l: "SF std mín. CEMA", v: res.SF_belt_std.toFixed(2), u: "req.", c: palette.muted },
-                  { l: "L10 min roletes", v: res.L10_min >= 1e6 ? (res.L10_min / 1e6).toFixed(2) + "M" : res.L10_min.toFixed(0), u: "h", c: res.L10_min >= 50000 ? palette.ok : res.L10_min >= 20000 ? palette.warn : palette.bad },
-                ].map((m, i) => (
-                  <div key={i} style={{ background: palette.bg0, borderLeft: `3px solid ${m.c}`, borderRadius: 5, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" as const }}>{m.l}</div>
-                    <div style={{ fontSize: 18, color: m.c, fontWeight: 700, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
-                    <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
+            {/* Fill section + Fill curve */}
+            <section className="cema-viz-grid">
+              <div className="cema-panel">
+                <div className="cema-panel-title"><div><h3>Belt cross-section fill</h3><p>The belt trough geometry stays fixed by the selected idler angle. The material surface varies with surcharge angle.</p></div><span className={`cema-badge ${r.fillAreaPct <= 100 ? 'ok' : 'bad'}`}>{r.fillAreaPct <= 100 ? 'within CEMA' : 'over CEMA'}</span></div>
+                <SvgPanel render={fillRender} height={460} />
+              </div>
+              <div className="cema-panel">
+                <div className="cema-panel-title"><div><h3>Fill curve</h3><p>Loaded area requirement versus geometric maximum area for the current belt section.</p></div><span className={`cema-badge ${r.fillAreaPct <= 100 ? 'ok' : 'bad'}`}>{r.fillAreaPct <= 100 ? 'within CEMA' : 'over CEMA'}</span></div>
+                <SvgPanel render={fillCurveRender} height={460} />
+              </div>
+            </section>
+
+            {/* Traction + Component table */}
+            <section className="cema-bottom-grid">
+              <div className="cema-panel">
+                <div className="cema-panel-title"><div><h3>Traction and take-up checks</h3><p>Single head-drive interpretation for T2 slip, T2 sag, counterweight, and associated checks.</p></div><span className={`cema-badge ${r.governingSource === 'Sag' ? 'warn' : 'ok'}`}>{r.governingSource.toLowerCase()} governs</span></div>
+                <SvgPanel render={tractionRender} height={320} />
+              </div>
+              <div className="cema-panel">
+                <div className="cema-panel-title"><div><h3>CEMA component table</h3><p>Each contribution listed in both tension and power terms.</p></div></div>
+                <div className="cema-panel-inner">
+                  <table className="cema-checks-table">
+                    <thead><tr><th>Component</th><th>Tension</th><th>Power</th><th>Basis</th></tr></thead>
+                    <tbody>
+                      {componentTableRows.map((row: CompRow, i: number) => (
+                        <tr key={i}>
+                          <td>{row.label}</td>
+                          <td className="mono">{fmtFixed(lbfToKn(row.lbf), 2)} kN <br /><span style={{ color: 'var(--muted)' }}>{fmtFixed(row.lbf, 0)} lbf</span></td>
+                          <td className="mono">{fmtFixed(row.kw, 2)} kW</td>
+                          <td>{row.basis}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+
+            {/* Checks + Basis */}
+            <section className="cema-bottom-grid">
+              <div className="cema-panel">
+                <div className="cema-panel-title"><div><h3>Checks and notes</h3><p>Warnings, assumptions, and things to verify against the final CEMA selection tables.</p></div></div>
+                <div className="cema-panel-inner">
+                  <div className="cema-warning-list">
+                    {warnings.map((item: {level: string; text: string}, i: number) => <div key={i} className={`cema-warning-item ${item.level}`}>{item.text}</div>)}
                   </div>
-                ))}
-              </div>
-              <div style={{ marginTop: 14, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 11, color: palette.muted }}>
-                <strong style={{ color: palette.copper }}>Comprimento de Transição:</strong> distância mínima para a correia passar de plana para a calha (λ = {inp.ang_rol}°) — <strong style={{ color: palette.text }}>{res.transition_L.toFixed(2)} m</strong>
-              </div>
-            </div>
-            <div style={card}>
-              <div style={cardTitle}>Tensões por Junção (entre trechos)</div>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                <thead>
-                  <tr style={{ borderBottom: `1px solid ${palette.border}` }}>
-                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Junção</th>
-                    <th style={{ ...lbl, textAlign: "right", padding: 8 }}>Posição (m)</th>
-                    <th style={{ ...lbl, textAlign: "right", padding: 8 }}>Elevação (m)</th>
-                    <th style={{ ...lbl, textAlign: "right", padding: 8 }}>Tensão T (kgf)</th>
-                    <th style={{ ...lbl, textAlign: "right", padding: 8 }}>% de Tad</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {res.junctions.map((j: any, i: number) => {
-                    const pct = (j.T / res.Tad) * 100;
-                    const c = pct > 100 ? palette.bad : pct > 80 ? palette.warn : palette.ok;
-                    return (
-                      <tr key={i} style={{ borderBottom: `1px solid ${palette.border}` }}>
-                        <td style={{ padding: "7px 8px", color: palette.copper, fontWeight: 700 }}>{i === 0 ? "Cauda (T2)" : `Junção ${j.seg}`}</td>
-                        <td style={{ padding: "7px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{j.x}</td>
-                        <td style={{ padding: "7px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{j.h}</td>
-                        <td style={{ padding: "7px 8px", textAlign: "right", fontWeight: 700, color: c, fontVariantNumeric: "tabular-nums" }}>{j.T}</td>
-                        <td style={{ padding: "7px 8px", textAlign: "right", color: c, fontVariantNumeric: "tabular-nums" }}>{pct.toFixed(1)}%</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <div style={card}>
-              <div style={cardTitle}>Resistências CEMA — Decomposição</div>
-              <ResistanceBars res={res} palette={palette}/>
-            </div>
-            <div style={card}>
-              <div style={cardTitle}>Perfil de Tensão</div>
-              <TensionChart res={res} palette={palette}/>
-            </div>
-            <div style={card}>
-              <div style={cardTitle}>Tabela Completa de Saídas</div>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                <tbody>
-                  {[
-                    ["Velocidade real (V)", res.V.toFixed(3), "m/s"],
-                    ["Velocidade mínima exigida", res.V_min?.toFixed(3) || "—", "m/s"],
-                    ["Capacidade real", res.cap_real.toFixed(0), "t/h"],
-                    ["Peso do material por metro (Wm)", res.Wm.toFixed(2), "kgf/m"],
-                    ["Área de enchimento real (Au)", res.fa.Au.toFixed(4), "m²"],
-                    ["Au referência CEMA", res.fa_ref.Au.toFixed(4), "m²"],
-                    ["Fator de utilização (Ku)", res.Ku.toFixed(3), "-"],
-                    ["Largura útil (b)", (res.fa.b_util * 1000).toFixed(0), "mm"],
-                    ["Coeficiente Ky (flexão correia)", res.Ky.toFixed(4), "-"],
-                    ["Coeficiente Kx (flexão idlers)", res.Kx.toFixed(4), "-"],
-                    ["Te (tensão efetiva)", res.Te.toFixed(0), "kgf"],
-                    ["T1 (lado tenso)", res.T1.toFixed(0), "kgf"],
-                    ["T2 (lado frouxo)", res.T2.toFixed(0), "kgf"],
-                    ["Tad (admissível)", res.Tad.toFixed(0), "kgf"],
-                    ["T sag (mín.)", res.T_sag.toFixed(0), "kgf"],
-                    ["Cw (Euler)", res.Cw.toFixed(3), "-"],
-                    ["Potência total", res.N_kw.toFixed(2), "kW"],
-                    ["Potência por motor", res.N_per_kw.toFixed(2), "kW"],
-                    ["Rotação tambor motor", res.n_tamb.toFixed(2), "rpm"],
-                    ["Relação de redução", res.i_red.toFixed(2), ":1"],
-                    ["Raio mín. convexa", res.radii.R_convex.toFixed(0), "m"],
-                    ["Raio mín. côncava", res.radii.R_concave.toFixed(0), "m"],
-                  ].map(([l, v, u], i) => (
-                    <tr key={i} style={{ borderBottom: `1px solid ${palette.border}` }}>
-                      <td style={{ padding: "7px 8px", color: palette.muted }}>{l}</td>
-                      <td style={{ padding: "7px 8px", color: palette.text, textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{v}</td>
-                      <td style={{ padding: "7px 8px", color: palette.copper, fontSize: 10, width: 60 }}>{u}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-
-        {/* === 2D INTERATIVO === */}
-        {tab === 7 && (
-          <div style={card}>
-            <div style={cardTitle}>Vista Lateral 2D — Editor Interativo (realimenta cálculos)</div>
-            {res && (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8, marginBottom: 12, padding: 10, background: palette.bg0, borderRadius: 6 }}>
-                {[
-                  { l: "θ real (c/ snub)", v: `${res.ang_abr_real.toFixed(0)}°`, c: palette.copper },
-                  { l: "Cw efetivo", v: res.Cw.toFixed(3), c: palette.text },
-                  { l: "T2 fator (tu)", v: res.T2_factor.toFixed(3), c: palette.warn },
-                  { l: "T1 resultante", v: `${res.T1.toFixed(0)} kgf`, c: res.tension_ok ? palette.ok : palette.bad },
-                  { l: "T2 resultante", v: `${res.T2.toFixed(0)} kgf`, c: palette.primary },
-                ].map((m, i) => (
-                  <div key={i} style={{ textAlign: "center" }}>
-                    <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase", fontWeight: 600 }}>{m.l}</div>
-                    <div style={{ fontSize: 14, color: m.c, fontWeight: 700, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
+                  <div className="cema-helper-grid">
+                    <div className="cema-helper-card"><strong>Nearest standard width</strong><span>{fmtFixed(r.estimate.standardWidthIn, 0)} in nearest standard ({fmtFixed(r.estimate.standardWidthIn * 25.4, 0)} mm)</span></div>
+                    <div className="cema-helper-card"><strong>Estimated belt weight</strong><span>{fmtFixed(r.estimate.kgpm, 1)} kg/m · {r.estimate.densityBand}</span></div>
+                    <div className="cema-helper-card"><strong>Slope</strong><span>{fmtFixed(r.slopePct, 2)} %</span></div>
+                    <div className="cema-helper-card"><strong>Counterweight approx.</strong><span>{fmtFixed(lbfToKn(r.counterweightLbf), 2)} kN total gravity counterweight</span></div>
                   </div>
-                ))}
-              </div>
-            )}
-            <div style={{ fontSize: 10, color: palette.muted, marginBottom: 8 }}>
-              ℹ Arraste os tambores: <strong>snub</strong> próximo ao motor aumenta θ (até +40°); <strong>tensionamento</strong> afastado da cauda aumenta T2 (até +15%). Os valores acima e os resultados em todas as abas são recalculados em tempo real.
-            </div>
-            <InteractiveProfile2D inp={inp} res={res} palette={palette} pulleys={pulleys} setPulleys={setPulleys}/>
-          </div>
-        )}
-
-        {/* === 3D === */}
-        {tab === 8 && (
-          <div style={card}>
-            <div style={cardTitle}>Visualização 3D — Three.js</div>
-            <ThreeViewer3D inp={inp} res={res} pulleys={pulleys} palette={palette}/>
-            <div style={{ marginTop: 10, fontSize: 10, color: palette.muted }}>
-              Use o mouse para orbitar, zoom (scroll) e pan (botão direito). A correia é renderizada por trechos respeitando os ângulos definidos em "Geometria".
-            </div>
-          </div>
-        )}
-
-        {/* === EQUAÇÕES === */}
-        {tab === 9 && (
-          <>
-            <div style={card}>
-              <div style={cardTitle}>Equações Principais — CEMA 7th Edition</div>
-              <div style={{ display: "grid", gap: 14 }}>
-                {[
-                  { t: "Tensão Efetiva", f: "Te = Tx + Ty + Tyr + Tm + Tb + Tsb + Tbc + Tpl + Tam", d: "Soma vetorial de todas as resistências ao movimento da correia carregada." },
-                  { t: "Flexão dos roletes (Tx)", f: "Tx = Kx · L", d: "Kx = 0.00068·(Wb + Wm) + A1/Si  — onde A1 é a constante CEMA da classe do rolete." },
-                  { t: "Flexão da correia (Ty)", f: "Ty = Ky · L · (Wb + Wm)", d: "Ky depende do comprimento total (interpolação CEMA Tab 6.1)." },
-                  { t: "Elevação do material (Tm)", f: "Tm = H · Wm", d: "H = elevação total acumulada de todos os trechos." },
-                  { t: "Tensão T1 (Euler)", f: "T1 = Te · Cw / (Cw − 1),   Cw = e^(μ·θ)", d: "θ em radianos. μ ≈ 0.35 com lagging, 0.25 sem lagging." },
-                  { t: "Tensão admissível", f: "Tad = (σ_lonas · B) / g", d: "σ_lonas em N/m, B em metros, resultado em kgf." },
-                  { t: "Tensão de sag mínima", f: "T_sag = Si · (Wb + Wm) / (8 · sag_max)", d: "sag_max ≤ 2% do espaçamento dos roletes." },
-                  { t: "Potência total", f: "P = (Te · g · V) / (η · 1000)", d: "Resultado em kW. η = ηcorreias · ηredutor · ηacoplamento." },
-                  { t: "Área de enchimento", f: "Au = A_trapézio + A_cap", d: "A_trapézio = f(λ, b);  A_cap = (bs/2)² · tan(Φs)" },
-                  { t: "Raio mínimo convexa", f: "Rmin = T1 / (Wb · cos β)", d: "Evita que a correia descole do tambor em uma curva convexa." },
-                  { t: "Raio mínimo côncava", f: "Rmin = 1.5 · T1 / (Wb · cos β)", d: "Evita levantamento da correia em curvas côncavas (mais crítico)." },
-                ].map((eq, i) => (
-                  <div key={i} style={{ padding: 12, background: palette.bg0, borderRadius: 6, borderLeft: `3px solid ${palette.copper}` }}>
-                    <div style={{ color: palette.copper, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>{eq.t}</div>
-                    <div style={{ fontFamily: '"Cambria Math", "Times New Roman", serif', fontSize: 16, color: palette.text, margin: "8px 0", fontStyle: "italic" }}>{eq.f}</div>
-                    <div style={{ fontSize: 11, color: palette.muted }}>{eq.d}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* === DINÂMICA / CHUTE === */}
-        {tab === 11 && (
-          <>
-            <div style={card}>
-              <div style={cardTitle}>Parâmetros de Partida e Frenagem (CEMA 14.5/14.6)</div>
-              <div style={grid(4)}>
-                <FField p={palette} label="Fator de partida Kst" val={inp.Kst} set={(v: any) => s("Kst", v)} step={0.1}/>
-                <FField p={palette} label="Tempo de partida" val={inp.t_start} set={(v: any) => s("t_start", v)} unit="s"/>
-                <FField p={palette} label="Tempo de frenagem" val={inp.t_brake} set={(v: any) => s("t_brake", v)} unit="s"/>
-                <FField p={palette} label="Desacel. frenagem" val={inp.a_brake} set={(v: any) => s("a_brake", v)} unit="m/s²" step={0.05}/>
-              </div>
-              <div style={{ marginTop: 12, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 10, color: palette.muted }}>
-                <strong style={{ color: palette.copper }}>Kst:</strong> típico 1.3 (partida suave) a 1.8 (partida direta). Regula o pico de Te na aceleração.<br/>
-                <strong style={{ color: palette.copper }}>t_start:</strong> tempo para atingir velocidade nominal. Maior = menor pico.<br/>
-                <strong style={{ color: palette.copper }}>a_brake:</strong> CEMA recomenda 0.2–0.5 m/s² para cargas normais; inferior a 0.3 para transportadores inclinados descendentes.
-              </div>
-            </div>
-
-            {res && (
-              <div style={card}>
-                <div style={cardTitle}>Regime de Partida</div>
-                <div style={{ ...grid(4), marginBottom: 10 }}>
-                  {[
-                    { l: "Massa total inercial", v: res.mass_total.toFixed(0), u: "kg" },
-                    { l: "Aceleração", v: res.a_start.toFixed(3), u: "m/s²" },
-                    { l: "Força inercial Fi", v: res.Fi_start.toFixed(0), u: "kgf" },
-                    { l: "Te partida", v: res.Te_start.toFixed(0), u: "kgf", c: palette.warn },
-                    { l: "T1 partida", v: res.T1_start.toFixed(0), u: "kgf", c: res.start_ok ? palette.ok : palette.bad },
-                    { l: "Potência pico", v: res.P_start_kw.toFixed(1), u: "kW", c: palette.copper },
-                    { l: "Torque pico (tambor)", v: res.torque_peak_start.toFixed(0), u: "N.m", c: palette.copper },
-                    { l: "Status", v: res.start_ok ? "OK" : "EXCEDE Tad", u: "", c: res.start_ok ? palette.ok : palette.bad },
-                  ].map((m, i) => (
-                    <div key={i} style={{ background: palette.bg0, borderLeft: `3px solid ${m.c || palette.text}`, borderRadius: 5, padding: "8px 10px" }}>
-                      <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" }}>{m.l}</div>
-                      <div style={{ fontSize: 14, color: m.c || palette.text, fontWeight: 700, marginTop: 2 }}>{m.v}</div>
-                      <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
-                    </div>
-                  ))}
                 </div>
               </div>
-            )}
-
-            {res && (
-              <div style={card}>
-                <div style={cardTitle}>Regime de Frenagem</div>
-                <div style={grid(4)}>
-                  {[
-                    { l: "Te frenagem", v: res.Te_brake.toFixed(0), u: "kgf" },
-                    { l: "T1 frenagem", v: res.T1_brake.toFixed(0), u: "kgf", c: res.brake_ok ? palette.ok : palette.bad },
-                    { l: "Distância parada", v: res.stop_distance.toFixed(1), u: "m" },
-                    { l: "Status", v: res.brake_ok ? "OK" : "EXCEDE Tad", u: "", c: res.brake_ok ? palette.ok : palette.bad },
-                  ].map((m, i) => (
-                    <div key={i} style={{ background: palette.bg0, borderLeft: `3px solid ${m.c || palette.text}`, borderRadius: 5, padding: "8px 10px" }}>
-                      <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" }}>{m.l}</div>
-                      <div style={{ fontSize: 14, color: m.c || palette.text, fontWeight: 700, marginTop: 2 }}>{m.v}</div>
-                      <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div style={card}>
-              <div style={cardTitle}>Chute Entupido (Plugged Chute) — Cisalhamento do Material</div>
-              <div style={{ marginBottom: 14, display: "flex", gap: 12, alignItems: "center" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                  <input type="checkbox" checked={inp.chute_plug} onChange={(e: any) => s("chute_plug", e.target.checked)}/>
-                  <span style={{ color: palette.text, fontSize: 12, fontWeight: 600 }}>Simular chute entupido</span>
-                </label>
-              </div>
-              <div style={grid(4)}>
-                <FField p={palette} label="Área contato chute" val={inp.chute_area_m2} set={(v: any) => s("chute_area_m2", v)} unit="m²" step={0.1}/>
-                <FField p={palette} label="Cisalhamento τ material" val={inp.mat_shear_kpa} set={(v: any) => s("mat_shear_kpa", v)} unit="kPa"/>
-              </div>
-              <div style={{ marginTop: 12, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 10, color: palette.muted }}>
-                <strong style={{ color: palette.copper }}>τ típicos:</strong> minério de ferro 30-50 kPa, carvão 15-25 kPa, calcário 20-40 kPa.<br/>
-                Força de cisalhamento: <em>F = τ · A</em> — aparece como carga adicional em Te se a correia for energizada com o chute obstruído.
-              </div>
-
-              {res && inp.chute_plug && (
-                <div style={{ marginTop: 14, padding: 14, background: palette.bg0, borderRadius: 6, borderLeft: `4px solid ${palette.bad}` }}>
-                  <div style={{ fontSize: 11, color: palette.bad, fontWeight: 700, textTransform: "uppercase", marginBottom: 10 }}>⚠ Pior Caso: Partida com Chute Entupido</div>
-                  <div style={grid(4)}>
+              <div className="cema-panel">
+                <div className="cema-panel-title"><div><h3>Calculation basis</h3><p>Equation summary and modeling assumptions used by this worksheet.</p></div></div>
+                <div className="cema-panel-inner cema-basis-body">
+                  <div className="cema-basis-box">
+                    <h4>Core equations</h4>
                     {[
-                      { l: "F cisalhamento", v: res.F_shear_plug.toFixed(0), u: "kgf" },
-                      { l: "Te com chute", v: res.Te_plug.toFixed(0), u: "kgf" },
-                      { l: "Te partida+chute", v: res.Te_start_plug.toFixed(0), u: "kgf", c: palette.warn },
-                      { l: "T1 pior caso", v: res.T1_start_plug.toFixed(0), u: "kgf", c: res.plug_ok ? palette.ok : palette.bad },
-                      { l: "Torque pico tambor", v: res.torque_peak_worst.toFixed(0), u: "N.m", c: palette.copper },
-                      { l: "Tad admissível", v: res.Tad.toFixed(0), u: "kgf" },
-                      { l: "Margem", v: ((res.Tad - res.T1_start_plug) / res.Tad * 100).toFixed(1), u: "%", c: res.plug_ok ? palette.ok : palette.bad },
-                      { l: "Status", v: res.plug_ok ? "APROVADO" : "REPROVADO", u: "", c: res.plug_ok ? palette.ok : palette.bad },
-                    ].map((m, i) => (
-                      <div key={i} style={{ background: palette.bg1, borderLeft: `3px solid ${m.c || palette.text}`, borderRadius: 5, padding: "8px 10px" }}>
-                        <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" }}>{m.l}</div>
-                        <div style={{ fontSize: 14, color: m.c || palette.text, fontWeight: 700, marginTop: 2 }}>{m.v}</div>
-                        <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
-                      </div>
+                      ['Material on belt, Wm', 'Q × 2000 / (60 × V)'],
+                      ['Kx', '[0.00068 × (Wb + Wm) + Ai] / Si'],
+                      ['Te', 'LKt(Kx + KyWb + 0.015Wb) + Wm(LKy + H) + Tp + Tam + Tac'],
+                      ['Tam', '0.00028755 × Q × (V − Vo)'],
+                      ['Plugged chute during flow', 'μWplug + τ × Aplug, or manual force'],
+                      ['Plugged chute at startup', 'Startup factor × plugged-chute flow resistance'],
+                      ['Belt power', 'Te × V / 33,000'],
+                      ['T2 slip', '|Te| × Cw'],
+                      ['T0 sag', '4.20, 6.25, or 8.40 × Si × (Wb + Wm)'],
+                      ['T2 sag', 'T0 + Tb − Tyr (single head-drive interpretation)'],
+                    ].map(([lhs, rhs]) => (
+                      <div key={lhs} className="cema-eq-line"><span className="lhs">{lhs}</span><span className="rhs">{rhs}</span></div>
                     ))}
                   </div>
+                  <div className="cema-basis-box">
+                    <h4>Modeling assumptions</h4>
+                    <p>This worksheet keeps the historical CEMA tension structure and exposes the lookup factors that normally come from the published tables and charts. It uses metric inputs for convenience, then converts internally to the imperial forms used by the historical equations.</p>
+                    <p>Occupied area is calculated strictly from throughput, belt speed, and bulk density. Maximum section area uses a CEMA area-factor calibration; CEMA available area is taken as 70% of that maximum area.</p>
+                    <p>Tp follows the simple pulley-count allowance method by default, with an optional manual Tp override. Ky, Kt, and Cw remain visible inputs so you can align the sheet with the exact standard lookup used on your project.</p>
+                    <p style={{ fontSize: 11, color: 'var(--muted)' }}>Current live load: {fmtFixed(r.wmKgPm, 1)} kg/m. Belt weight basis: {r.useEstimatedBeltWeight ? `estimated ${fmtFixed(r.beltWeightKgPm, 1)} kg/m` : `manual ${fmtFixed(r.beltWeightKgPm, 1)} kg/m`}.</p>
+                  </div>
                 </div>
-              )}
-            </div>
-          </>
-        )}
-
-        {/* === AVISOS === */}
-        {tab === 10 && (
-          <div style={card}>
-            <div style={cardTitle}>Avisos e Validações</div>
-            <div style={{ display: "grid", gap: 8 }}>
-              {warnings.map((w, i) => {
-                const c = w.level === "ok" ? palette.ok : w.level === "warn" ? palette.warn : palette.bad;
-                const icon = w.level === "ok" ? "✓" : w.level === "warn" ? "⚠" : "✕";
-                return (
-                  <div key={i} style={{
-                    display: "flex", gap: 12, padding: 12, background: palette.bg0,
-                    border: `1px solid ${c}55`, borderLeft: `4px solid ${c}`, borderRadius: 6,
-                  }}>
-                    <div style={{ color: c, fontSize: 18, fontWeight: 800 }}>{icon}</div>
-                    <div style={{ color: palette.text, fontSize: 12, lineHeight: 1.5 }}>{w.text}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* === SELEÇÃO DE CORREIA === */}
-        {tab === 12 && res && (
-          <>
-            <div style={card}>
-              <div style={cardTitle}>Parâmetros de Seleção de Correia</div>
-              <div style={grid(4)}>
-                {[
-                  { l: "T1 efetivo", v: res.T1_eff.toFixed(0), u: "kgf" },
-                  { l: "T1 por mm de largura", v: res.T1_N_per_mm.toFixed(2), u: "N/mm" },
-                  { l: "Rating mínimo requerido", v: res.belt_rating_req.toFixed(0), u: "N/mm" },
-                  { l: "SF padrão CEMA", v: res.SF_belt_std.toFixed(2), u: "-" },
-                  { l: "SF real (correia atual)", v: res.SF_belt_actual.toFixed(2), u: "-", c: res.belt_ok ? palette.ok : palette.bad },
-                  { l: "Velocidade atual", v: res.V.toFixed(2), u: "m/s" },
-                  { l: "Largura correia", v: `${inp.larg_pol}" (${(inp.larg_pol * 25.4).toFixed(0)} mm)`, u: "" },
-                  { l: "Resist. lonas atual", v: inp.cap_tens.toFixed(0), u: "N/m" },
-                ].map((m, i) => (
-                  <div key={i} style={{ background: palette.bg0, borderLeft: `3px solid ${m.c || palette.primary}`, borderRadius: 5, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" as const }}>{m.l}</div>
-                    <div style={{ fontSize: 14, color: m.c || palette.text, fontWeight: 700, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
-                    <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
-                  </div>
-                ))}
               </div>
-            </div>
-            <div style={card}>
-              <div style={cardTitle}>Catálogo de Correias — CEMA / NBR</div>
-              <div style={{ marginBottom: 10, fontSize: 11, color: palette.muted }}>
-                Rating em N/mm (= kN/m). Verde = atende ao SF mínimo ({res.SF_belt_std.toFixed(2)}x). Primeira correia adequada destacada.
-              </div>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                <thead>
-                  <tr style={{ borderBottom: `2px solid ${palette.border}` }}>
-                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Tipo</th>
-                    <th style={{ ...lbl, textAlign: "right", padding: 8 }}>Rating (N/mm)</th>
-                    <th style={{ ...lbl, textAlign: "right", padding: 8 }}>Req. mín. (N/mm)</th>
-                    <th style={{ ...lbl, textAlign: "left", padding: 8 }}>Cobertura (mm)</th>
-                    <th style={{ ...lbl, textAlign: "right", padding: 8 }}>Vel. máx (m/s)</th>
-                    <th style={{ ...lbl, textAlign: "center", padding: 8 }}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(() => {
-                    let firstAdequate = true;
-                    return BELT_CATALOG.map((belt, i) => {
-                      const adequate = belt.rating >= res.belt_rating_req && belt.max_vel >= res.V;
-                      const isFirst = adequate && firstAdequate;
-                      if (isFirst) firstAdequate = false;
-                      const rowBg = isFirst ? `${palette.ok}22` : "transparent";
-                      const statusC = adequate ? palette.ok : palette.bad;
-                      const statusTxt = adequate ? "OK" : "INSUFICIENTE";
-                      return (
-                        <tr key={i} style={{ borderBottom: `1px solid ${palette.border}`, background: rowBg }}>
-                          <td style={{ padding: "7px 8px", color: isFirst ? palette.ok : belt.st ? palette.copper : palette.text, fontWeight: isFirst ? 800 : 600 }}>
-                            {isFirst ? ">> " : ""}{belt.type}
-                          </td>
-                          <td style={{ padding: "7px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: adequate ? palette.ok : palette.bad, fontWeight: 700 }}>{belt.rating}</td>
-                          <td style={{ padding: "7px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: palette.muted }}>{res.belt_rating_req.toFixed(0)}</td>
-                          <td style={{ padding: "7px 8px", color: palette.muted }}>{belt.cover}</td>
-                          <td style={{ padding: "7px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: belt.max_vel >= res.V ? palette.text : palette.bad }}>{belt.max_vel.toFixed(1)}</td>
-                          <td style={{ padding: "7px 8px", textAlign: "center" }}>
-                            <span style={{ background: `${statusC}22`, color: statusC, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>{statusTxt}</span>
-                          </td>
+            </section>
+
+            {/* Validation */}
+            <section className="cema-bottom-grid">
+              <div className="cema-panel">
+                <div className="cema-panel-title">
+                  <div><h3>Validation against reference examples</h3><p>Benchmark comparison using published CEMA-style examples for power/tension and published capacity charts for loaded and available belt section.</p></div>
+                  <span className={`cema-badge ${validationResults.every((v: ValRow) => v.maxAbs <= 1.0) && areaValidationResults.every((v: AreaValRow) => v.pass) ? 'ok' : 'warn'}`}>
+                    {validationResults.every((v: ValRow) => v.maxAbs <= 1.0) && areaValidationResults.every((v: AreaValRow) => v.pass) ? `${validationResults.length} power + ${areaValidationResults.length} area checks passed` : 'review deviations'}
+                  </span>
+                </div>
+                <div className="cema-panel-inner">
+                  <table className="cema-checks-table">
+                    <thead><tr><th>Case</th><th>Expected</th><th>Calculated</th><th>Max delta</th><th>Status</th><th>Action</th></tr></thead>
+                    <tbody>
+                      {validationResults.map(({ item, calc, deviations, maxAbs }: ValRow) => {
+                        const pass = maxAbs <= 1.0;
+                        return (
+                          <tr key={item.id}>
+                            <td><strong>{item.label}</strong><br /><span style={{ color: 'var(--muted)' }}>{item.source}</span></td>
+                            <td className="mono">Te {fmtFixed(lbfToKn(item.expected.teLbf), 2)} kN<br />HP {fmtFixed(item.expected.beltHp, 2)}<br />T2 {fmtFixed(lbfToKn(item.expected.t2Lbf), 2)} kN<br />T1 {fmtFixed(lbfToKn(item.expected.t1Lbf), 2)} kN</td>
+                            <td className="mono">Te {fmtFixed(lbfToKn(calc.teLbf), 2)} kN<br />HP {fmtFixed(calc.beltHp, 2)}<br />T2 {fmtFixed(lbfToKn(calc.t2Lbf), 2)} kN<br />T1 {fmtFixed(lbfToKn(calc.t1Lbf), 2)} kN</td>
+                            <td className="mono">Te {fmtFixed(deviations.te, 2)}%<br />HP {fmtFixed(deviations.hp, 2)}%<br />T2 {fmtFixed(deviations.t2, 2)}%<br />T1 {fmtFixed(deviations.t1, 2)}%</td>
+                            <td><span className={`cema-badge ${pass ? 'ok' : 'warn'}`}>{pass ? 'Pass' : 'Review'}</span><br /><span style={{ color: 'var(--muted)', fontSize: 11 }}>max |Δ| {fmtFixed(maxAbs, 2)}%</span></td>
+                            <td><button className="cema-btn secondary" style={{ padding: '8px 10px', fontSize: 12 }} onClick={() => dispatch({ type: 'SET_ALL', state: { ...item.input as State, theme: state.theme } })}>Load case</button></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <div style={{ height: 12 }} />
+                  <table className="cema-checks-table">
+                    <thead><tr><th>Area / edge case</th><th>Expected</th><th>Calculated</th><th>Delta</th><th>Status</th></tr></thead>
+                    <tbody>
+                      {areaValidationResults.map((row: AreaValRow) => (
+                        <tr key={row.id}>
+                          <td><strong>{row.label}</strong></td>
+                          <td className="mono">{fmtFixed(row.expected, row.unit === 'mm' ? 0 : 6)} {row.unit}</td>
+                          <td className="mono">{fmtFixed(row.calculated, row.unit === 'mm' ? 0 : 6)} {row.unit}</td>
+                          <td className="mono">{fmtFixed(row.delta, 2)}%</td>
+                          <td><span className={`cema-badge ${row.pass ? 'ok' : 'warn'}`}>{row.pass ? 'Pass' : 'Review'}</span></td>
                         </tr>
-                      );
-                    });
-                  })()}
-                </tbody>
-              </table>
-              <div style={{ marginTop: 12, padding: 10, background: palette.bg0, borderRadius: 6, fontSize: 11, color: palette.muted }}>
-                <strong style={{ color: palette.copper }}>SF mínimo CEMA (têxtil):</strong> 6.67 (correias EP). Para correias de aço (ST), SF recomendado pode ser 5.0–6.0 conforme fabricante.<br/>
-                <strong style={{ color: palette.copper }}>Nota:</strong> o rating indicado é a resistência nominal por largura unitária. A tensão admissível real = rating × largura.
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* === VIDA DOS ROLETES === */}
-        {tab === 13 && res && (
-          <>
-            <div style={card}>
-              <div style={cardTitle}>Parâmetros dos Roletes</div>
-              <div style={grid(4)}>
-                {[
-                  { l: "Classe CEMA", v: inp.idler_cl, u: "" },
-                  { l: "Diâm. do rolo", v: `${inp.d_idler_mm} mm`, u: "" },
-                  { l: "Capacidade dyn. C", v: res.C_brg.toFixed(0), u: "N" },
-                  { l: "Rotação do rolo", v: res.n_roll.toFixed(1), u: "rpm" },
-                  { l: "Carga/rolamento (carga)", v: res.F_l_carga_N.toFixed(0), u: "N" },
-                  { l: "Carga/rolamento (retorno)", v: res.F_l_ret_N.toFixed(0), u: "N" },
-                  { l: "Espaç. roletes carga", v: inp.esp_rol.toFixed(2), u: "m" },
-                  { l: "Espaç. roletes retorno", v: inp.esp_rol_ret.toFixed(2), u: "m" },
-                ].map((m, i) => (
-                  <div key={i} style={{ background: palette.bg0, borderLeft: `3px solid ${palette.primary}`, borderRadius: 5, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" as const }}>{m.l}</div>
-                    <div style={{ fontSize: 14, color: palette.text, fontWeight: 700, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
-                    <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="cema-warning-list" style={{ marginTop: 12 }}>
+                    {validationResults.map(({ item, maxAbs }: ValRow) => <div key={item.id} className={`cema-warning-item ${maxAbs <= 1.0 ? 'ok' : 'warn'}`}>{item.label}: {item.note}</div>)}
                   </div>
-                ))}
-              </div>
-            </div>
-            <div style={card}>
-              <div style={cardTitle}>Vida L10 dos Rolamentos (CEMA Cap. 11)</div>
-              <div style={grid(3)}>
-                {[
-                  { l: "L10 ramal de carga", v: res.L10_carga >= 1e6 ? (res.L10_carga / 1e6).toFixed(2) + "M h" : res.L10_carga.toFixed(0) + " h", c: res.L10_carga >= 50000 ? palette.ok : res.L10_carga >= 20000 ? palette.warn : palette.bad },
-                  { l: "L10 ramal de retorno", v: res.L10_ret >= 1e6 ? (res.L10_ret / 1e6).toFixed(2) + "M h" : res.L10_ret.toFixed(0) + " h", c: res.L10_ret >= 50000 ? palette.ok : res.L10_ret >= 20000 ? palette.warn : palette.bad },
-                  { l: "L10 crítico (mínimo)", v: res.L10_min >= 1e6 ? (res.L10_min / 1e6).toFixed(2) + "M h" : res.L10_min.toFixed(0) + " h", c: res.L10_min >= 50000 ? palette.ok : res.L10_min >= 20000 ? palette.warn : palette.bad },
-                ].map((m, i) => (
-                  <div key={i} style={{ background: palette.bg0, borderLeft: `3px solid ${m.c}`, borderRadius: 5, padding: "12px 14px" }}>
-                    <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" as const }}>{m.l}</div>
-                    <div style={{ fontSize: 22, color: m.c, fontWeight: 700, marginTop: 4, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
-                  </div>
-                ))}
-              </div>
-              <div style={{ marginTop: 16, padding: 14, background: palette.bg0, borderRadius: 6 }}>
-                <div style={{ ...lbl, marginBottom: 10 }}>Vida em operação (24 h/dia)</div>
-                <div style={grid(3)}>
-                  {[
-                    { l: "Dias (carga)", v: (res.L10_carga / 24).toFixed(0), u: "dias" },
-                    { l: "Dias (retorno)", v: (res.L10_ret / 24).toFixed(0), u: "dias" },
-                    { l: "Anos (L10 crítico)", v: (res.L10_min / (24 * 365)).toFixed(2), u: "anos" },
-                  ].map((m, i) => (
-                    <div key={i} style={{ textAlign: "center" }}>
-                      <div style={{ fontSize: 9, color: palette.muted, textTransform: "uppercase" as const }}>{m.l}</div>
-                      <div style={{ fontSize: 18, color: palette.copper, fontWeight: 700, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{m.v}</div>
-                      <div style={{ fontSize: 9, color: palette.muted }}>{m.u}</div>
-                    </div>
-                  ))}
                 </div>
               </div>
-              <div style={{ marginTop: 14, padding: 12, background: palette.bg0, borderRadius: 6, borderLeft: `4px solid ${res.L10_min >= 50000 ? palette.ok : res.L10_min >= 20000 ? palette.warn : palette.bad}`, fontSize: 11, color: palette.muted, lineHeight: 1.7 }}>
-                <strong style={{ color: palette.copper }}>Recomendação CEMA:</strong> L10 mínimo recomendado para operação contínua (24h/dia) é de <strong>50.000 h</strong> (≈ 5.7 anos).
-                {res.L10_min < 20000 && <span style={{ color: palette.bad }}> ATENÇÃO: vida muito baixa. Considere aumentar a classe dos roletes, reduzir o espaçamento ou diminuir a carga.</span>}
-                {res.L10_min >= 20000 && res.L10_min < 50000 && <span style={{ color: palette.warn }}> Vida abaixo do ideal. Avalie plano de manutenção preventiva com troca de roletes.</span>}
-                {res.L10_min >= 50000 && <span style={{ color: palette.ok }}> Vida adequada para operação contínua.</span>}
-                <br/>
-                <strong style={{ color: palette.copper }}>Fórmula L10:</strong> L10 = (C/F)³ × (16667 / n_rpm)  — onde C = capacidade dinâmica do rolamento (N), F = força radial por rolamento (N), n = rotação do rolo (rpm).
+              <div className="cema-panel">
+                <div className="cema-panel-title"><div><h3>Validation scope</h3><p>What was checked in this file and what remains outside the present model.</p></div></div>
+                <div className="cema-panel-inner cema-basis-body">
+                  <div className="cema-basis-box"><h4>Validated in this file</h4><p>Steady-state historical-method calculations were checked against two external benchmarks: a published CEMA-style worked example and the public Rulmeca calculation workbook sample. The benchmark set covers Wm, Kx/Ky/Kt usage, Te, belt horsepower, T2 slip, T2 sag, and T1.</p></div>
+                  <div className="cema-basis-box"><h4>Not covered by the present model</h4><p>This module currently validates the steady-state power and tension sheet only. The belt loading module uses occupied area directly from throughput, speed, and bulk density; maximum section area uses a Belt Analyst-compatible CEMA area-factor calibration; CEMA available area is taken as 70% of maximum; and section fill is reported as occupied divided by CEMA available. Edge distance is then solved from the calibrated cross-section geometry for the occupied area.</p></div>
+                </div>
               </div>
-            </div>
-          </>
-        )}
+            </section>
 
-      </div>
-    </div>
+            {/* Profile editor — full width */}
+            <section style={{ marginBottom: 18 }}>
+              <div className="cema-panel" style={{ gridColumn: '1 / -1' }}>
+                <div className="cema-panel-title">
+                  <div><h3>Iterative 2D profile and vertical curve checks</h3><p>Define multiple conveyor segments by station and elevation, place drive / take-up / pulleys / feed markers, and check each vertical curve against admissible radii using CEMA-style local-tension criteria.</p></div>
+                  <span className={`cema-badge ${r.profile.curves.filter(c => c.status !== 'OK').length ? 'warn' : 'ok'}`}>{r.profile.curves.filter(c => c.status !== 'OK').length ? `${r.profile.curves.filter(c => c.status !== 'OK').length} review` : 'checked'}</span>
+                </div>
+                <div className="cema-panel-inner">
+                  <div className="cema-profile-summary">
+                    <div className="cema-profile-chip"><strong>Profile length</strong>{fmtFixed(r.profile.totalLen, 1)} m</div>
+                    <div className="cema-profile-chip"><strong>Highest point</strong>{fmtFixed(Math.max(...r.profile.nodes.map(n => n.elev)), 2)} m</div>
+                    <div className="cema-profile-chip"><strong>Curves checked</strong>{r.profile.curves.length}</div>
+                    <div className="cema-profile-chip"><strong>Worst margin</strong>{Number.isFinite(worstMargin) ? `${fmtFixed(worstMargin, 1)} %` : '–'}</div>
+                  </div>
+
+                  <div className="cema-profile-shell" style={{ marginTop: 14 }}>
+                    <div>
+                      <div className="cema-toolbar-row">
+                        <button className="cema-mini-btn primary" onClick={profileUpdateFns.addNode}>Add node</button>
+                        <button className="cema-mini-btn" onClick={profileUpdateFns.addMarker}>Add marker</button>
+                        <button className="cema-mini-btn" onClick={profileUpdateFns.syncFromLengthLift}>Sync from length/lift</button>
+                      </div>
+                      <ProfileSvgPanel r={r} dispatch={dispatch} />
+                      <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>Drag the blue nodes in the 2D profile to iterate geometry. Drag the gold markers horizontally to reposition drive, take-up, tail/return pulleys, and feed points.</p>
+                    </div>
+
+                    <div className="cema-profile-editor" style={{ display: 'grid', gap: 14 }}>
+                      <div className="cema-basis-box">
+                        <h4>Curve calculation inputs</h4>
+                        {([['beltModulusKNpm','Belt modulus, E','kN/m',1],['beltRatedTensionKNpm','Rated belt tension, tr','kN/m',1],['minBuckleTensionKNpm','Minimum centre tension, Tmin','kN/m',0.1],['autoCurveShare','Auto curve share','0–0.8',0.05]] as const).map(([f,lbl,u,step]) => (
+                          <div key={f} className="cema-input-row"><div className="cema-input-head"><label>{lbl}</label><div className="cema-input-wrap"><span className="cema-unit-chip">{u}</span><input type="number" step={step} value={state[f] as number} onChange={set(f)} /></div></div></div>
+                        ))}
+                        <p style={{ fontSize: 11, color: 'var(--muted)' }}>R<sub>11</sub> lift-off, R<sub>12</sub>/R<sub>13</sub> concave tension checks, R<sub>21</sub>/R<sub>22</sub> convex tension checks, and the practical convex idler-angle criterion R<sub>23</sub> = 114 × idler spacing are evaluated with local tension at each curve.</p>
+                      </div>
+
+                      <div>
+                        <h4 className="cema-section-heading">Profile nodes</h4>
+                        <table className="cema-profile-table">
+                          <thead><tr><th>Node</th><th>Station (m)</th><th>Elevation (m)</th><th>Curve length (m)</th><th></th></tr></thead>
+                          <tbody>
+                            {r.profile.nodes.map((node, i) => (
+                              <tr key={node.id}>
+                                <td>{node.id}</td>
+                                <td><input type="number" step="0.1" defaultValue={fmtFixed(node.station, 2)} onBlur={(e: React.FocusEvent<HTMLInputElement>) => updateNodeField(i, 'station', e.target.value)} /></td>
+                                <td><input type="number" step="0.1" defaultValue={fmtFixed(node.elev, 2)} onBlur={(e: React.FocusEvent<HTMLInputElement>) => updateNodeField(i, 'elev', e.target.value)} /></td>
+                                <td><input type="number" step="0.1" defaultValue={fmtFixed(node.curveLengthM, 2)} onBlur={(e: React.FocusEvent<HTMLInputElement>) => updateNodeField(i, 'curveLengthM', e.target.value)} /></td>
+                                <td>{i > 0 && i < r.profile.nodes.length - 1 && <button className="cema-mini-btn danger" onClick={() => removeNode(i)}>Remove</button>}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div>
+                        <h4 className="cema-section-heading">Markers</h4>
+                        <table className="cema-profile-table">
+                          <thead><tr><th>Label</th><th>Type</th><th>Station (m)</th><th></th></tr></thead>
+                          <tbody>
+                            {r.profile.markers.map((m, i) => (
+                              <tr key={m.id}>
+                                <td><input type="text" defaultValue={m.label} onBlur={(e: React.FocusEvent<HTMLInputElement>) => updateMarkerField(i, 'label', e.target.value)} /></td>
+                                <td><input type="text" defaultValue={m.type} onBlur={(e: React.FocusEvent<HTMLInputElement>) => updateMarkerField(i, 'type', e.target.value)} /></td>
+                                <td><input type="number" step="0.1" defaultValue={fmtFixed(m.station, 2)} onBlur={(e: React.FocusEvent<HTMLInputElement>) => updateMarkerField(i, 'station', e.target.value)} /></td>
+                                <td><button className="cema-mini-btn danger" onClick={() => removeMarker(i)}>Remove</button></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div>
+                        <h4 className="cema-section-heading">Vertical curve checks</h4>
+                        <div className="cema-curve-table-wrap">
+                          <table className="cema-checks-table">
+                            <thead><tr><th>Curve</th><th>Type</th><th>Station</th><th>R calc (m)</th><th>R min (m)</th><th>Criteria</th><th>Margin</th><th>Status</th></tr></thead>
+                            <tbody>
+                              {r.profile.curves.length ? r.profile.curves.map(c => {
+                                const checks = Object.entries(c.checks).filter(([, v]) => Number.isFinite(v) && v > 0).map(([k, v]) => `${k} ${fmtFixed(v, 1)} m`).join(', ');
+                                const sl = c.status === 'OK' ? 'ok' : c.status === 'Review' ? 'warn' : 'bad';
+                                return (
+                                  <tr key={c.id}>
+                                    <td><strong>{c.id}</strong><br /><span style={{ color: 'var(--muted)' }}>{fmtFixed(c.startStation, 1)}–{fmtFixed(c.endStation, 1)} m</span></td>
+                                    <td>{c.type}</td>
+                                    <td className="mono">{fmtFixed(c.station, 1)} m<br /><span style={{ color: 'var(--muted)' }}>Δ {fmtFixed(c.deltaDeg, 2)}°</span></td>
+                                    <td className="mono">{fmtFixed(c.actualR, 1)}</td>
+                                    <td className="mono">{fmtFixed(c.requiredR, 1)}</td>
+                                    <td style={{ fontSize: 11 }}>{checks || '–'}</td>
+                                    <td className="mono">{fmtFixed(c.marginPct, 1)} %</td>
+                                    <td><span className={`cema-badge ${sl}`}>{c.status}</span></td>
+                                  </tr>
+                                );
+                              }) : <tr><td colSpan={8}>No vertical curves are currently defined in the profile.</td></tr>}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+          </div>{/* end right column */}
+        </div>{/* end cema-tool */}
+      </main>
+    </>
   );
 }
