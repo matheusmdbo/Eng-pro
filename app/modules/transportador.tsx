@@ -1667,3 +1667,43 @@ export function ConveyorCalculator() {
     </>
   );
 }
+
+export const CONFIG = {
+  id: 'transportador',
+  name: 'Transportador de Correia',
+  subtitle: 'CEMA 7th Edition',
+  icon: '=>',
+  color: '#58a6ff',
+  price: 349.9,
+  description:
+    'Modulo completo e autocontido para calculo de potencia, tensoes, enchimento e verificacoes de perfil de transportador de correia.',
+  norma: 'CEMA 7th Edition',
+};
+
+export const GLOSSARY = [
+  {
+    cat: 'ENTRADA',
+    items: [
+      { s: 'capacityTph', d: 'Capacidade de transporte na correia.', u: 't/h' },
+      { s: 'beltSpeed', d: 'Velocidade linear da correia.', u: 'm/s' },
+      { s: 'centerLengthM', d: 'Comprimento entre centros do transportador.', u: 'm' },
+      { s: 'liftM', d: 'Elevacao total entre cauda e descarga.', u: 'm' },
+      { s: 'beltWidthMm', d: 'Largura nominal da correia.', u: 'mm' },
+      { s: 'bulkDensity', d: 'Densidade aparente do material.', u: 't/m3' },
+    ],
+  },
+  {
+    cat: 'SAIDA',
+    items: [
+      { s: 'Te', d: 'Tensao efetiva total requerida.', u: 'lbf / kN' },
+      { s: 'power', d: 'Potencia requerida pela correia e acionamento.', u: 'hp / kW' },
+      { s: 'fillAreaPct', d: 'Percentual de ocupacao da area util de secao.', u: '%' },
+      { s: 'T1 / T2', d: 'Tensoes de lado tenso e frouxo para verificacao de acionamento.', u: 'lbf / kN' },
+      { s: 'profile', d: 'Checagens de curvas verticais e geometria do perfil.', u: '-' },
+    ],
+  },
+];
+
+export default function TransportadorMod() {
+  return <ConveyorCalculator />;
+}
