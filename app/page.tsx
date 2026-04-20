@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { getSupabaseEnv } from '@/lib/supabase/env'
 import { redirect } from 'next/navigation'
 import LoginPage from './components/LoginPage'
 import Dashboard from './components/Dashboard'
@@ -10,6 +11,23 @@ export default async function Page({
 }: {
   searchParams: Promise<{ status?: string; error?: string }>
 }) {
+  const { configured } = getSupabaseEnv()
+
+  if (!configured) {
+    return (
+      <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: '#060a10', color: '#c9d1d9' }}>
+        <div style={{ maxWidth: 720, padding: 24, border: '1px solid #21262d', borderRadius: 12, background: '#0d1117' }}>
+          <h1 style={{ marginTop: 0, marginBottom: 12, fontSize: 28 }}>Configuracao pendente do ambiente</h1>
+          <p style={{ margin: 0, lineHeight: 1.6 }}>
+            O deploy esta ativo, mas as variaveis do Supabase nao foram encontradas.
+            Configure na Vercel `SUPABASE_URL` e `SUPABASE_ANON_KEY`, ou use
+            `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+          </p>
+        </div>
+      </main>
+    )
+  }
+
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   const params = await searchParams
