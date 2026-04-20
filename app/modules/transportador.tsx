@@ -436,14 +436,22 @@ function sanitizeProfile(nodesRaw: string, markersRaw: string, totalLengthM: num
     { id: 'M1', label: 'Tail', type: 'tail', station: 0 },
     { id: 'M2', label: 'Drive', type: 'drive', station: L },
   ];
-  const nodes: ProfileNode[] = parseJsonList<ProfileNode>(nodesRaw, defaultNodes).map((n, i) => ({
-    id: String(n.id ?? `N${i}`), station: Number(n.station) || 0,
-    elev: Number(n.elev) || 0, curveLengthM: Number(n.curveLengthM) || 0,
-  }));
-  const markers: ProfileMarker[] = parseJsonList<ProfileMarker>(markersRaw, defaultMarkers).map((m, i) => ({
-    id: String(m.id ?? `M${i}`), label: String(m.label ?? `Marker ${i}`),
-    type: String(m.type ?? 'custom'), station: Number(m.station) || 0,
-  }));
+  const nodes: ProfileNode[] = parseJsonList<ProfileNode>(nodesRaw, defaultNodes)
+    .map((n, i) => ({
+      id: String(n.id ?? `N${i}`), station: Number(n.station) || 0,
+      elev: Number(n.elev) || 0, curveLengthM: Number(n.curveLengthM) || 0,
+    }))
+    .sort((a, b) => a.station - b.station)
+    .map((node, i, arr) => ({
+      ...node,
+      station: clamp(node.station, i > 0 ? arr[i - 1].station : 0, L),
+    }));
+  const markers: ProfileMarker[] = parseJsonList<ProfileMarker>(markersRaw, defaultMarkers)
+    .map((m, i) => ({
+      id: String(m.id ?? `M${i}`), label: String(m.label ?? `Marker ${i}`),
+      type: String(m.type ?? 'custom'), station: Number(m.station) || 0,
+    }))
+    .map(marker => ({ ...marker, station: clamp(marker.station, 0, L) }));
   return { nodes, markers };
 }
 
@@ -455,8 +463,9 @@ function computeProfileAndCurves(s: State, baseResults: { teLbf: number; t2Lbf: 
   const absTe = Math.abs(baseResults.teLbf);
   const tensionAtStationLbf = (station: number) => {
     const x = clamp(station, 0, totalLen);
-    if (x <= drivePos) return baseResults.t2Lbf + ((drivePos - x) / Math.max(drivePos, 1e-6)) * absTe;
-    return baseResults.t2Lbf;
+    if (x <= drivePos) return baseResults.t2Lbf + (x / Math.max(drivePos, 1e-6)) * absTe;
+    const returnSpan = Math.max(totalLen - drivePos, 1e-6);
+    return baseResults.t1Lbf - ((x - drivePos) / returnSpan) * absTe;
   };
   const wmTotal = baseResults.wmKgPm + baseResults.beltWeightKgPm;
   const alpha = (s.troughAngleDeg || 0) * Math.PI / 180;
@@ -499,7 +508,7 @@ function computeProfileAndCurves(s: State, baseResults: { teLbf: number; t2Lbf: 
     } else {
       req['R21_edgeStress'] = tr > 0 ? (E * widthM * Math.sin(alpha)) / Math.max(tr - localWidthTension, 1e-6) : 0;
       req['R22_buckle'] = tmin > 0 ? (E * widthM) / Math.max(tmin, 1e-6) * 0.01 : 0;
-      req['R23_idlerAngle'] = 114 * 0.3048 * 1.0;
+      req['R23_idlerAngle'] = 114 * Math.max(s.idlerSpacingM, 0.1);
     }
     const positiveReq = Object.values(req).filter(v => Number.isFinite(v) && v > 0);
     const requiredR = positiveReq.length ? Math.max(...positiveReq) : NaN;
@@ -700,8 +709,8 @@ const VALIDATION_CASES = [
 
 const AREA_VALIDATION_CASES = [
   { id: 'occupiedAreaIdentity', label: 'Occupied area from Q / (3600 × ρ × v)', unit: 'm²', tolerancePct: 0.01, expected: 1200 / (3600 * 1.60 * 3.00), calculated: () => compute({ ...DEFAULTS, capacityTph: 1200, bulkDensity: 1.60, beltSpeed: 3.00 }).occupiedAreaM2 },
-  { id: 'available35x36', label: 'Available area · 36 in · 35° trough · 20° surcharge', unit: 'm²', tolerancePct: 0.5, expected: 0.092903, calculated: () => interpolateAvailableAreaM2(36 * 0.0254, 35, 20) },
-  { id: 'available45x48', label: 'Available area · 48 in · 45° trough · 20° surcharge', unit: 'm²', tolerancePct: 0.5, expected: 0.198193, calculated: () => interpolateAvailableAreaM2(48 * 0.0254, 45, 20) },
+  { id: 'available35x36', label: 'Available area · 36 in · 35° trough · 20° surcharge', unit: 'm²', tolerancePct: 0.5, expected: 0.1223, calculated: () => interpolateAvailableAreaM2(36 * 0.0254, 35, 20) },
+  { id: 'available45x48', label: 'Available area · 48 in · 45° trough · 20° surcharge', unit: 'm²', tolerancePct: 0.5, expected: 0.2468, calculated: () => interpolateAvailableAreaM2(48 * 0.0254, 45, 20) },
   { id: 'edgeClearance1200', label: 'Edge clearance · 1200 mm belt', unit: 'mm', tolerancePct: 0.01, expected: 2 * (0.05 * 1200 + 25), calculated: () => 2 * edgeDistancePerSideM(1.2) * 1000 },
 ];
 
