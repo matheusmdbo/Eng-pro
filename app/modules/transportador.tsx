@@ -796,15 +796,18 @@ function svgBreakdownChart(r: CalcResult, w: number, h: number): string {
 }
 
 function svgFillSection(r: CalcResult, w: number, h: number): string {
-  const padLeft = 36, padRight = 24, padTop = 44, padBottom = 40;
-  const { geom, apexHeightM } = r.fillModel;
+  const padLeft = 36, padRight = 24, padTop = 88, padBottom = 72;
+  const { geom, apexHeightM, loadedHalfWidthM } = r.fillModel;
   const phiDeg = r.surchargeAngleDeg, phi = phiDeg * Math.PI / 180;
   const ySurf = (x: number) => apexHeightM - Math.abs(x) * Math.tan(phi);
   const xMin = -geom.usableHalfWidth, xMax = geom.usableHalfWidth;
-  const viewTop = geom.edgeY + geom.usableHalfWidth * Math.tan(60 * Math.PI / 180);
+  const materialShoulderY = loadedHalfWidthM > 0 ? Math.max(0, ySurf(loadedHalfWidthM)) : 0;
+  const viewTop = Math.max(apexHeightM, geom.edgeY, materialShoulderY, 0.001);
   const plotW = w - padLeft - padRight, plotH = h - padTop - padBottom;
-  const scale = Math.min(plotW / (xMax - xMin), plotH / Math.max(viewTop, 0.001));
-  const xOrigin = (w - (xMax - xMin) * scale) / 2, yBase = h - padBottom;
+  const scaleX = plotW / Math.max(xMax - xMin, 0.001);
+  const scaleY = plotH / Math.max(viewTop, 0.001);
+  const scale = Math.min(scaleX, scaleY * 2.2);
+  const xOrigin = (w - (xMax - xMin) * scale) / 2, yBase = h - padBottom + Math.max(0, (plotH - viewTop * scale) / 2);
   const sx = (x: number) => xOrigin + (x - xMin) * scale;
   const sy = (y: number) => yBase - y * scale;
   const beltPts = [[xMin, geom.edgeY], [-geom.centerHalf, 0], [geom.centerHalf, 0], [xMax, geom.edgeY]];
